@@ -1,10 +1,3 @@
-Tentu bisa! Ini versi README yang sudah ku- *update* bagian **Prerequisites**-nya supaya mencakup berbagai distro Linux lainnya dan juga Windows.
-
-Kamu bisa langsung *copy-paste* kode di bawah ini ke file `README.md` milikmu:
-
----
-
-```markdown
 # youtidy 🎵
 
 `youtidy` is a Rust-based TUI (Terminal User Interface) app that downloads audio from YouTube, automatically identifies tracks using acoustic fingerprinting (**AcoustID & MusicBrainz**), embeds album art, and organizes ID3v2 metadata.
