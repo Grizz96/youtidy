@@ -526,7 +526,9 @@ async fn run_pipeline(
     let client_id = env::var("ACOUSTID_CLIENT_ID")
         .map_err(|_| "ACOUSTID_CLIENT_ID environment variable not set")?;
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .user_agent("youtidy/1.0.0 ( github.com/Grizz96/youtidy )")
+        .build()?;
     let response = client
         .post("https://api.acoustid.org/v2/lookup")
         .form(&[
@@ -585,7 +587,6 @@ async fn run_pipeline(
 
     // Download album art/thumbnail
     let _ = tx.send(AppEvent::ProcessingLog("[>] Fetching album art...".to_string())).await;
-    let client = reqwest::Client::new();
     let mut art_data = None;
 
     if let Some(ref release_mbid) = mbid {
