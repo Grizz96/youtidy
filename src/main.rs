@@ -205,6 +205,43 @@ struct ReleaseGroup {
     #[serde(rename = "first-release-date")]
     first_release_date: Option<String>,
 }
+fn load_config() {
+    // 1. Try to find config.toml in current directory
+    let mut config_path = std::path::PathBuf::from("config.toml");
+    if !config_path.exists() {
+        // 2. Try ~/.config/youtidy/config.toml
+        if let Ok(home_dir) = env::var("HOME") {
+            let mut home = std::path::PathBuf::from(home_dir);
+            home.push(".config");
+            home.push("youtidy");
+            home.push("config.toml");
+            config_path = home;
+        }
+    }
+
+    if config_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&config_path) {
+            if let Ok(config) = content.parse::<toml::Table>() {
+                if let Some(music) = config.get("music").and_then(|v| v.as_table()) {
+                    if let Some(dir) = music.get("directory").and_then(|v| v.as_str()) {
+                        unsafe { env::set_var("YOUTIDY_MUSIC_DIR", dir); }
+                    }
+                    if let Some(fmt) = music.get("format").and_then(|v| v.as_str()) {
+                        unsafe { env::set_var("YOUTIDY_FORMAT", fmt); }
+                    }
+                }
+                if let Some(api) = config.get("api").and_then(|v| v.as_table()) {
+                    if let Some(id) = api.get("acoustid_client_id").and_then(|v| v.as_str()) {
+                        unsafe { env::set_var("ACOUSTID_CLIENT_ID", id); }
+                    }
+                    if let Some(tok) = api.get("genius_access_token").and_then(|v| v.as_str()) {
+                        unsafe { env::set_var("GENIUS_ACCESS_TOKEN", tok); }
+                    }
+                }
+            }
+        }
+    }
+}
 
 fn check_dependencies() -> Result<(), Box<dyn Error>> {
     let binaries = ["yt-dlp", "ffmpeg", "fpcalc"];
@@ -221,7 +258,7 @@ fn check_dependencies() -> Result<(), Box<dyn Error>> {
     }
 
     if env::var("ACOUSTID_CLIENT_ID").is_err() {
-        return Err("ACOUSTID_CLIENT_ID environment variable not set (check .env file)".into());
+        return Err("ACOUSTID_CLIENT_ID environment variable not set (check config.toml or .env file)".into());
     }
 
     Ok(())
@@ -230,6 +267,7 @@ fn check_dependencies() -> Result<(), Box<dyn Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv().ok();
+    load_config();
 
     // 1. Startup Validation
     if let Err(e) = check_dependencies() {
@@ -477,18 +515,21 @@ async fn run_pipeline(
     video: SearchResult,
     tx: tokio::sync::mpsc::Sender<AppEvent>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
+    let format = env::var("YOUTIDY_FORMAT").unwrap_or_else(|_| "mp3".to_string());
+    let temp_filename = format!("cache/temp_download.{}", format);
+    let temp_path = std::path::Path::new(&temp_filename);
+
     // 1. Download audio
     let _ = tx.send(AppEvent::ProcessingLog("[>] Starting download...".to_string())).await;
     std::fs::create_dir_all("cache")?;
-    let temp_mp3 = std::path::Path::new("cache/temp_download.mp3");
-    if temp_mp3.exists() {
-        let _ = std::fs::remove_file(temp_mp3);
+    if temp_path.exists() {
+        let _ = std::fs::remove_file(temp_path);
     }
 
     let output = tokio::process::Command::new("yt-dlp")
         .arg("-x")
         .arg("--audio-format")
-        .arg("mp3")
+        .arg(&format)
         .arg("-o")
         .arg("cache/temp_download.%(ext)s")
         .arg(&video.url)
@@ -505,7 +546,7 @@ async fn run_pipeline(
     let _ = tx.send(AppEvent::ProcessingLog("[>] Calculating fingerprint...".to_string())).await;
     let output = tokio::process::Command::new("fpcalc")
         .arg("-json")
-        .arg("cache/temp_download.mp3")
+        .arg(&temp_filename)
         .output()
         .await?;
 
@@ -635,8 +676,7 @@ async fn run_pipeline(
         artist, album, title
     ))).await;
 
-    let path = "cache/temp_download.mp3";
-    let mut tagged_file = lofty::read_from_path(path)?;
+    let mut tagged_file = lofty::read_from_path(&temp_filename)?;
     
     // Get primary tag mutably or create one
     let tag = match tagged_file.primary_tag_mut() {
@@ -662,7 +702,7 @@ async fn run_pipeline(
         tag.push_picture(picture);
     }
     
-    tagged_file.save_to_path(path, lofty::config::WriteOptions::default())?;
+    tagged_file.save_to_path(&temp_filename, lofty::config::WriteOptions::default())?;
     let _ = tx.send(AppEvent::ProcessingLog("[>] Tagging complete.".to_string())).await;
 
     // 6. Move to final destination
@@ -670,7 +710,8 @@ async fn run_pipeline(
     let clean_album = sanitize_path_segment(&album);
     let clean_title = sanitize_path_segment(&title);
 
-    let dest_dir = format!("Music/{}/{}", clean_artist, clean_album);
+    let base_music_dir = env::var("YOUTIDY_MUSIC_DIR").unwrap_or_else(|_| "Music".to_string());
+    let dest_dir = format!("{}/{}/{}", base_music_dir, clean_artist, clean_album);
     std::fs::create_dir_all(&dest_dir)?;
 
     if let Some((ref bytes, ref mime)) = art_data {
@@ -683,10 +724,10 @@ async fn run_pipeline(
         }
     }
 
-    let dest_file = format!("{}/{}.mp3", dest_dir, clean_title);
+    let dest_file = format!("{}/{}.{}", dest_dir, clean_title, format);
     
-    std::fs::copy("cache/temp_download.mp3", &dest_file)?;
-    std::fs::remove_file("cache/temp_download.mp3")?;
+    std::fs::copy(&temp_filename, &dest_file)?;
+    std::fs::remove_file(&temp_filename)?;
     
     let _ = tx.send(AppEvent::ProcessingLog(format!("[>] File saved to destination: {}", dest_file))).await;
 

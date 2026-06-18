@@ -1,0 +1,13 @@
+[music]
+# Directory where downloaded songs will be saved (can be relative or absolute)
+directory = "Music"
+
+# Audio format for yt-dlp to extract (e.g. mp3, flac, m4a, opus)
+format = "mp3"
+
+[api]
+# AcoustID Client ID for audio fingerprinting
+acoustid_client_id = "your_acoustid_client_id_here"
+
+# Genius access token for lyrics scraping
+genius_access_token = "your_genius_access_token_here"
