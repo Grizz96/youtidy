@@ -1,0 +1,220 @@
+#!/bin/env sh
+
+# Exit early if lyrics already exist
+if [ "$HAS_LRC" = "true" ]; then
+    exit 0
+fi
+
+LRCLIB_INSTANCE="https://lrclib.net"
+SCRIPT_DIR=$(dirname "$0")
+PYTHON_WORKER="$SCRIPT_DIR/venv/bin/python3 $SCRIPT_DIR/lyrics_worker.py"
+MUSIC_DIR="$HOME/Music"
+
+# Logging
+LOG_FILE="/tmp/getlyrics.log"
+echo "[$(date)] START: PID=$PID, ARTIST='$ARTIST', TITLE='$TITLE', DURATION='$DURATION'" >> "$LOG_FILE"
+
+# Format Duration
+if echo "$DURATION" | grep -q ":"; then
+    SONG_DURATION=$(echo "$DURATION" | awk -F: '{ if (NF==3) print $1*3600+$2*60+$3; else print $1*60+$2; }')
+else
+    SONG_DURATION="${DURATION:-0}"
+fi
+
+# Name Cleaning
+clean_name() {
+    echo "$1" | sed -E '
+        s/　/ /g;
+        s/[“”„〝‟]/\"/g;
+        s/[‘’‚‛]/\"/g;
+        s/[「」]/\"/g;
+        s/[『』]/\"/g;
+        s/[【】]/\"/g;
+        s/\s*[\(\[][^\]\)]*(official|lyrics?|lirik|video|music|audio|hd|4k|high quality|remastered|feat|ft|prod|opening|ending|theme|op|ed|ost|tv size|full|special|movie|anime|eng|rom|kanji|mv|pv|karaoke|cover|TVアニメ|テーマ)[^\]\)]*[\)\]]//gi;
+        s/\s*[\(\[][^\]\)]*[\)\]]//gi;
+        s/\s*\(.*\)//g;
+        s/\s*\[.*\]//g;
+        s/\s*（.*）//g;
+        s/\s*（.*//g;
+        s/\b(official|lyrics?|lirik|lagu|video|music|audio|hd|4k|high quality|remastered|opening|ending|theme|op|ed|ost|tv size|full|special|movie|anime|mv|pv|karaoke|cover)\b/ /gi;
+        s/^\s*//;
+        s/\s*$//;
+        s/\(\)//g;
+        s/\[\]//g;
+        s/\s{2,}/ /g;
+        s/^\s*//;
+        s/\s*$//'
+}
+
+# Detection logic
+clean_simple() {
+    echo "$1" | sed -E 's/[^[:alnum:]]//g' | tr '[:upper:]' '[:lower:]'
+}
+
+if echo "$TITLE" | grep -Eq " \[.*\]"; then
+    DETECTED_ARTIST=$(echo "$TITLE" | sed -E 's/ \[.*//')
+    DETECTED_TITLE=$(echo "$TITLE" | sed -E 's/.*\[//; s/\].*//')
+elif echo "$TITLE" | grep -Eq " [-–—] "; then
+    LEFT=$(echo "$TITLE" | sed -E 's/ [-–—] .*//')
+    RIGHT=$(echo "$TITLE" | sed -E 's/.* [-–—] //')
+
+    SIMPLE_ARTIST=$(clean_simple "$ARTIST")
+    SIMPLE_LEFT=$(clean_simple "$LEFT")
+    # Clean right from metadata for comparison
+    SIMPLE_RIGHT=$(clean_simple "$(echo "$RIGHT" | sed -E 's/\s*[\(\[].*//g')")
+
+    # Priority 1: If LEFT matches original ARTIST, then Artist - Title
+    if [ "$SIMPLE_LEFT" = "$SIMPLE_ARTIST" ] && [ -n "$SIMPLE_LEFT" ]; then
+        DETECTED_ARTIST="$LEFT"
+        DETECTED_TITLE="$RIGHT"
+    # Priority 2: If RIGHT matches original ARTIST, then Title - Artist (Swap)
+    elif [ "$SIMPLE_RIGHT" = "$SIMPLE_ARTIST" ] && [ -n "$SIMPLE_RIGHT" ]; then
+        DETECTED_ARTIST="$RIGHT"
+        DETECTED_TITLE="$LEFT"
+    # Priority 3: If original ARTIST is generic/channel name, trust metadata clues
+    elif echo "$ARTIST" | grep -Eiq '(lirik|lyrics?|official|video|music|channel|youtube|topic|vevo|indonesia|indolirik|production|music lover)'; then
+        # Check if one side is a known artist/title pattern
+        # If Right has 'lyrics' but Left looks like 'Artist', it might be Artist - Title (Lyrics)
+        # We'll use a simple heuristic: if it's "Artist - ... lyrics", it's probably Artist - Title
+        if echo "$RIGHT" | grep -Eiq '(lyrics?|lirik)' && ! echo "$LEFT" | grep -Eiq '(lyrics?|lirik)'; then
+            DETECTED_ARTIST="$LEFT"
+            DETECTED_TITLE="$RIGHT"
+        elif echo "$LEFT" | grep -Eiq '(lyrics?|lirik)' && ! echo "$RIGHT" | grep -Eiq '(lyrics?|lirik)'; then
+            DETECTED_ARTIST="$RIGHT"
+            DETECTED_TITLE="$LEFT"
+        elif echo "$RIGHT" | grep -Eiq '(eng|rom|kanji|sub|official|video|cover|karaoke)'; then
+            # Title - Artist (Metadata)
+            DETECTED_TITLE="$LEFT"
+            DETECTED_ARTIST=$(echo "$RIGHT" | sed -E 's/\s*[\(\[].*//g')
+        else
+            # Default: Artist - Title
+            DETECTED_ARTIST="$LEFT"
+            DETECTED_TITLE="$RIGHT"
+        fi
+    else
+        # Default: Artist - Title
+        DETECTED_ARTIST="$LEFT"
+        DETECTED_TITLE="$RIGHT"
+    fi
+elif echo "$TITLE" | grep -Eq "[“”「\"『].+[“”」\"』]"; then
+    DETECTED_ARTIST=$(echo "$TITLE" | sed -E 's/[“”「\"『].*//')
+    DETECTED_TITLE=$(echo "$TITLE" | sed -E 's/[^“”「\"『]*[“”「\"『]([^“”」\"』]+)[“”」\"』].*/\1/')
+    [ -z "$(echo "$DETECTED_ARTIST" | tr -d '[:space:]')" ] && DETECTED_ARTIST=$(echo "$TITLE" | sed -E 's/.*[“”「\"『].+[“”「\"』]//')
+else
+    DETECTED_ARTIST="$ARTIST"
+    DETECTED_TITLE="$TITLE"
+fi
+
+CLEAN_ARTIST=$(clean_name "$DETECTED_ARTIST" | sed -E 's/[|/].*//' | sed -E 's/\s*(official\s*)?YouTube\s*channel//gi' | sed -E 's/^[[:space:]]*//; s/[[:space:]]*$//')
+
+# Consistent naming for specific artists
+case "$(echo "$CLEAN_ARTIST" | tr '[:upper:]' '[:lower:]')" in
+    "vk blanka"|"ビッケブランカ") CLEAN_ARTIST="Vicke Blanka" ;;
+esac
+
+CLEAN_TITLE=$(clean_name "$DETECTED_TITLE" | sed -E 's/^[[:space:]]*//; s/[[:space:]]*$//')
+
+# Fallback to original metadata if detected is empty
+[ -z "$(echo "$CLEAN_ARTIST" | tr -d '[:space:]')" ] && CLEAN_ARTIST=$(clean_name "$ARTIST")
+[ -z "$(echo "$CLEAN_TITLE" | tr -d '[:space:]')" ] && CLEAN_TITLE=$(clean_name "$TITLE")
+
+# Remove redundant artist from title
+if [ -n "$CLEAN_ARTIST" ]; then
+    CLEAN_TITLE=$(echo "$CLEAN_TITLE" | sed "s/^$CLEAN_ARTIST\s*//gi; s/\s*$CLEAN_ARTIST\s*//gi; s/^\s*[-–—]\s*//; s/\s*[-–—]\s*$//")
+fi
+
+echo "[$(date)] CLEANED: Artist='$CLEAN_ARTIST', Title='$CLEAN_TITLE'" >> "$LOG_FILE"
+
+if [ "$HAS_LRC" = "false" ]; then
+    mkdir -p "$(dirname "$LRC_FILE")"
+
+    # STRATEGI 1: GET (Direct match)
+    echo "Fetching: $CLEAN_ARTIST - $CLEAN_TITLE"
+    MATCH_DATA=$(curl -s -X GET -G -H "Lrclib-Client: rmpc-$VERSION" \
+        --data-urlencode "artist_name=$CLEAN_ARTIST" \
+        --data-urlencode "track_name=$CLEAN_TITLE" \
+        --data-urlencode "album_name=$ALBUM" \
+        --data-urlencode "duration=$SONG_DURATION" \
+        "$LRCLIB_INSTANCE/api/get")
+
+    LYRICS=$(echo "$MATCH_DATA" | jq -r '.syncedLyrics // empty' 2>/dev/null)
+    LRC_DURATION=$(echo "$MATCH_DATA" | jq -r '.duration // 0' 2>/dev/null)
+
+    # Fallback search if direct match fails
+    if [ -z "$LYRICS" ] || [ "$LYRICS" = "null" ]; then
+        echo "Fallback: Swapping Artist and Title..."
+        MATCH_DATA=$(curl -s -X GET -G -H "Lrclib-Client: rmpc-$VERSION" \
+            --data-urlencode "artist_name=$CLEAN_TITLE" \
+            --data-urlencode "track_name=$CLEAN_ARTIST" \
+            --data-urlencode "duration=$SONG_DURATION" \
+            "$LRCLIB_INSTANCE/api/get")
+        LYRICS=$(echo "$MATCH_DATA" | jq -r '.syncedLyrics // empty' 2>/dev/null)
+
+        # If still no lyrics, try without duration for the swapped match
+        if [ -z "$LYRICS" ] || [ "$LYRICS" = "null" ]; then
+            MATCH_DATA=$(curl -s -X GET -G -H "Lrclib-Client: rmpc-$VERSION" \
+                --data-urlencode "artist_name=$CLEAN_TITLE" \
+                --data-urlencode "track_name=$CLEAN_ARTIST" \
+                "$LRCLIB_INSTANCE/api/get")
+            LYRICS=$(echo "$MATCH_DATA" | jq -r '.syncedLyrics // empty' 2>/dev/null)
+        fi
+        LRC_DURATION=$(echo "$MATCH_DATA" | jq -r '.duration // 0' 2>/dev/null)
+    fi
+
+    # Fallback search with extra info if still fails
+    if [ -z "$LYRICS" ] || [ "$LYRICS" = "null" ]; then
+        echo "Fallback: Searching lrclib with extra info..."
+        EXTRA_INFO=$(echo "$TITLE" | sed 's/[^[:alnum:] ]/ /g' | awk '{$1=$1;print}')
+        MATCH_DATA=$(curl -s -X GET -G -H "Lrclib-Client: rmpc-$VERSION" \
+            --data-urlencode "q=$EXTRA_INFO" \
+            "$LRCLIB_INSTANCE/api/search" | jq -c --argjson target "$SONG_DURATION" '
+            if type == "array" and length > 0 then
+                map(select(.syncedLyrics != null and .duration != null)) |
+                sort_by((.duration - $target) | abs) | .[0]
+            else empty end' 2>/dev/null)
+        LYRICS=$(echo "$MATCH_DATA" | jq -r '.syncedLyrics // empty' 2>/dev/null)
+        LRC_DURATION=$(echo "$MATCH_DATA" | jq -r '.duration // 0' 2>/dev/null)
+    fi
+
+    OFFSET=$(awk -v s="$SONG_DURATION" -v l="$LRC_DURATION" 'BEGIN { printf "%.2f", s - l }')
+
+    # PROCESS & SAVE
+    if [ -n "$LYRICS" ] && [ "$LYRICS" != "null" ]; then
+        {
+            echo "[ar:$ARTIST]"
+            echo "[al:$ALBUM]"
+            echo "[ti:$TITLE]"
+            echo "$LYRICS" | sed -E '/^\[(ar|al|ti):/d'
+        } | $PYTHON_WORKER process "$OFFSET" "$CLEAN_ARTIST" "$CLEAN_TITLE" > "$LRC_FILE"
+    else
+        # Genius Fallback (Direct fetch if no lrclib)
+        echo "Fallback: Genius fetch..."
+        LYRICS=$($PYTHON_WORKER fetch 0 "$CLEAN_ARTIST" "$CLEAN_TITLE")
+        if [ -n "$LYRICS" ]; then
+            {
+                echo "[ar:$ARTIST]"
+                echo "[al:$ALBUM]"
+                echo "[ti:$TITLE]"
+                echo "$LYRICS"
+            } > "$LRC_FILE"
+        fi
+    fi
+
+    if [ ! -s "$LRC_FILE" ]; then
+        echo "[$(date)] NOT FOUND: $CLEAN_TITLE" >> "$LOG_FILE"
+        rmpc remote --pid "$PID" status "Lyrics not found for $CLEAN_TITLE" --level warn
+        exit
+    fi
+
+    # Ensure file path is absolute if it's not
+    case "$FILE" in
+        /*) ABS_FILE="$FILE" ;;
+        *)  ABS_FILE="$MUSIC_DIR/$FILE" ;;
+    esac
+
+    # Update metadata and database
+    "$SCRIPT_DIR/update_metadata.sh" "$ABS_FILE" "$CLEAN_ARTIST" "$CLEAN_TITLE" &
+
+    rmpc remote --pid "$PID" indexlrc --path "$LRC_FILE"
+    rmpc remote --pid "$PID" status "LRC Synced (${OFFSET}s): $CLEAN_TITLE" --level info
+fi

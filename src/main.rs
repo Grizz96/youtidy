@@ -22,6 +22,7 @@ use lofty::tag::Accessor;
 use lofty::picture::{MimeType, Picture, PictureType};
 
 mod ui;
+mod lyrics;
 
 #[derive(Debug, PartialEq, Clone)]
 enum AppState {
@@ -689,6 +690,20 @@ async fn run_pipeline(
     
     let _ = tx.send(AppEvent::ProcessingLog(format!("[>] File saved to destination: {}", dest_file))).await;
 
+    // 7. Fetch and save lyrics
+    if let Err(e) = lyrics::fetch_and_save_lyrics(
+        &client,
+        &artist,
+        &title,
+        &album,
+        duration,
+        &dest_dir,
+        &clean_title,
+        tx.clone(),
+    ).await {
+        let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Lyrics lookup skipped/failed: {}", e))).await;
+    }
+
     Ok(dest_file)
 }
 
@@ -703,7 +718,7 @@ async fn query_musicbrainz(
     let _ = tx.send(AppEvent::ProcessingLog(format!("[>] Querying MusicBrainz for MBID: {}...", recording_mbid))).await;
 
     let client = reqwest::Client::builder()
-        .user_agent("RustAudioTaggerTUI/1.0.0 ( github.com/yourusername )")
+        .user_agent("youtidy/1.0.0 ( github.com/Grizz96/youtidy )")
         .build()?;
 
     let url = format!(
