@@ -515,6 +515,39 @@ async fn romanize_lrc(
     output
 }
 
+fn clean_query_name(name: &str) -> String {
+    let mut cleaned = name
+        .replace('　', " ")
+        .replace('「', "\"")
+        .replace('」', "\"")
+        .replace('『', "\"")
+        .replace('』', "\"")
+        .replace('【', "\"")
+        .replace('】', "\"");
+
+    // Remove common metadata flags like (Official Video), (Music Video), [Lyrics], etc.
+    if let Ok(re_brackets_meta) = regex::Regex::new(r"(?i)\s*[\(\[][^\]\)]*(official|lyrics?|lirik|video|music|audio|hd|4k|high quality|remastered|feat|ft|prod|opening|ending|theme|op|ed|ost|tv|full|special|movie|anime|eng|rom|kanji|mv|pv|karaoke|cover|テーマ)[^\]\)]*[\)\]]") {
+        cleaned = re_brackets_meta.replace_all(&cleaned, "").to_string();
+    }
+
+    // Remove general brackets if any are left
+    if let Ok(re_brackets_empty) = regex::Regex::new(r"\s*[\(\[（].*[\)\]）]") {
+        cleaned = re_brackets_empty.replace_all(&cleaned, "").to_string();
+    }
+
+    // Remove isolated keywords
+    if let Ok(re_keywords) = regex::Regex::new(r"(?i)\b(official|lyrics?|lirik|video|music|audio|hd|4k|high quality|remastered|opening|ending|theme|op|ed|ost|full|special|movie|anime|mv|pv|karaoke|cover)\b") {
+        cleaned = re_keywords.replace_all(&cleaned, "").to_string();
+    }
+
+    // Clean up spaces
+    if let Ok(re_spaces) = regex::Regex::new(r"\s+") {
+        cleaned = re_spaces.replace_all(&cleaned, " ").to_string();
+    }
+
+    cleaned.trim().to_string()
+}
+
 pub async fn fetch_and_save_lyrics(
     client: &reqwest::Client,
     artist: &str,
@@ -527,14 +560,14 @@ pub async fn fetch_and_save_lyrics(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _ = tx.send(AppEvent::ProcessingLog("[>] Starting lyrics search...".to_string())).await;
     
-    let clean_artist = artist.trim();
-    let clean_track = title.trim();
+    let clean_artist = clean_query_name(artist);
+    let clean_track = clean_query_name(title);
     
-    let synced_lyrics = match get_lrclib_synced_lyrics(client, clean_artist, clean_track, album, duration, tx.clone()).await {
+    let synced_lyrics = match get_lrclib_synced_lyrics(client, &clean_artist, &clean_track, album, duration, tx.clone()).await {
         Ok(Some(lrc)) => Some(lrc),
         _ => {
             let _ = tx.send(AppEvent::ProcessingLog("[>] Swapping artist and title search...".to_string())).await;
-            match get_lrclib_synced_lyrics(client, clean_track, clean_artist, album, duration, tx.clone()).await {
+            match get_lrclib_synced_lyrics(client, &clean_track, &clean_artist, album, duration, tx.clone()).await {
                 Ok(Some(lrc)) => Some(lrc),
                 _ => None,
             }
@@ -547,12 +580,12 @@ pub async fn fetch_and_save_lyrics(
         
         if contains_japanese(&synced) {
             let _ = tx.send(AppEvent::ProcessingLog("[>] Japanese lyrics detected. Romanizing...".to_string())).await;
-            if let Some(res) = run_python_lyrics_worker("process", offset, clean_artist, clean_track, Some(&synced)).await {
+            if let Some(res) = run_python_lyrics_worker("process", offset, &clean_artist, &clean_track, Some(&synced)).await {
                 let _ = tx.send(AppEvent::ProcessingLog("[+] Processed lyrics using Python lyrics worker.".to_string())).await;
                 res
             } else {
                 let _ = tx.send(AppEvent::ProcessingLog("[!] Python worker not available or failed. Using Rust fallback...".to_string())).await;
-                romanize_lrc(&synced, clean_artist, clean_track, offset, client, tx.clone()).await
+                romanize_lrc(&synced, &clean_artist, &clean_track, offset, client, tx.clone()).await
             }
         } else {
             let _ = tx.send(AppEvent::ProcessingLog("[>] Shifting timestamps to match audio...".to_string())).await;
@@ -560,12 +593,12 @@ pub async fn fetch_and_save_lyrics(
         }
     } else {
         let _ = tx.send(AppEvent::ProcessingLog("[!] Synced lyrics not found on LRCLIB. Trying Genius fallback...".to_string())).await;
-        if let Some(res) = run_python_lyrics_worker("fetch", 0.0, clean_artist, clean_track, None).await {
+        if let Some(res) = run_python_lyrics_worker("fetch", 0.0, &clean_artist, &clean_track, None).await {
             let _ = tx.send(AppEvent::ProcessingLog("[+] Found lyrics on Genius via Python worker.".to_string())).await;
             format!("[ar:{}]\n[al:{}]\n[ti:{}]\n{}", artist, album, title, res)
         } else {
             let _ = tx.send(AppEvent::ProcessingLog("[!] Python worker fallback failed or not found. Trying Rust Genius search...".to_string())).await;
-            match fetch_genius_lyrics(client, clean_artist, clean_track, tx.clone()).await {
+            match fetch_genius_lyrics(client, &clean_artist, &clean_track, tx.clone()).await {
                 Ok(Some(genius_lyrics)) => {
                     let _ = tx.send(AppEvent::ProcessingLog("[+] Plain lyrics found on Genius.".to_string())).await;
                     format!("[ar:{}]\n[al:{}]\n[ti:{}]\n{}", artist, album, title, genius_lyrics)
