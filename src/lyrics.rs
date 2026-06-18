@@ -358,17 +358,23 @@ async fn fetch_genius_lyrics(
     track: &str,
     tx: tokio::sync::mpsc::Sender<AppEvent>,
 ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
-    let token = "EviJJdLFRxHEsXptwJVlzyAWDM--2tvchhs69tGuKyVd94KSVjblCc8FjUpg7DZb";
+    let token = match std::env::var("GENIUS_ACCESS_TOKEN") {
+        Ok(t) if !t.trim().is_empty() => t,
+        _ => {
+            let _ = tx.send(AppEvent::ProcessingLog("[!] GENIUS_ACCESS_TOKEN not set in .env. Skipping Rust Genius search.".to_string())).await;
+            return Ok(None);
+        }
+    };
     let query_romanized = format!("{} {} Romanized", artist, track);
     let mut url = None;
     
     let _ = tx.send(AppEvent::ProcessingLog("[>] Searching Genius (Romanized)...".to_string())).await;
-    if let Some(found_url) = query_genius_api(client, &query_romanized, token).await? {
+    if let Some(found_url) = query_genius_api(client, &query_romanized, &token).await? {
         url = Some(found_url);
     } else {
         let query_standard = format!("{} {}", artist, track);
         let _ = tx.send(AppEvent::ProcessingLog("[>] Romanized not found. Searching Genius (Standard)...".to_string())).await;
-        if let Some(found_url) = query_genius_api(client, &query_standard, token).await? {
+        if let Some(found_url) = query_genius_api(client, &query_standard, &token).await? {
             url = Some(found_url);
         }
     }

@@ -7,7 +7,7 @@ cutlet_katsu = None
 genius_api = None
 
 # Genius Token
-TOKEN = "EviJJdLFRxHEsXptwJVlzyAWDM--2tvchhs69tGuKyVd94KSVjblCc8FjUpg7DZb"
+TOKEN = os.environ.get("GENIUS_ACCESS_TOKEN", "")
 
 
 def contains_japanese(text):
