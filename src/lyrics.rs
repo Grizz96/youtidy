@@ -65,25 +65,6 @@ impl PythonRomanizer {
     }
 }
 
-fn normalize_kakasi(text: &str) -> String {
-    if text.is_empty() {
-        return String::new();
-    }
-    let mut normalized = if contains_japanese(text) {
-        romanize_text_kakasi(text)
-    } else {
-        text.to_string()
-    };
-    normalized = normalized.to_lowercase();
-    let mut cleaned = String::new();
-    for c in normalized.chars() {
-        if c.is_alphanumeric() || c.is_whitespace() {
-            cleaned.push(c);
-        }
-    }
-    cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
 async fn normalize_text(text: &str, romanizer: &mut Option<PythonRomanizer>) -> String {
     if text.is_empty() {
         return String::new();
@@ -113,19 +94,7 @@ struct Aligner {
 }
 
 impl Aligner {
-    fn new(reference_text: &str) -> Self {
-        let mut reference_lines = Vec::new();
-        let mut reference_norms = Vec::new();
-        
-        for line in reference_text.lines() {
-            let line = line.trim();
-            if !line.is_empty() && !(line.starts_with('[') && line.ends_with(']')) {
-                let cleaned_line = line.replace('\u{2005}', " ").replace('\u{200b}', "");
-                reference_norms.push(normalize_kakasi(&cleaned_line));
-                reference_lines.push(cleaned_line);
-            }
-        }
-        
+    fn new(reference_lines: Vec<String>, reference_norms: Vec<String>) -> Self {
         Self {
             reference_lines,
             reference_norms,
@@ -362,7 +331,7 @@ fn clean_html_lyrics(html: &str) -> String {
         content = content.replace("<br/>", "\n")
                          .replace("<br>", "\n")
                          .replace("<br />", "\n");
-                         
+                          
         content = content.replace("</p>", "\n");
         
         let re_tags = regex::Regex::new(r"<[^>]*>").unwrap();
@@ -419,6 +388,46 @@ async fn fetch_genius_lyrics(
     Ok(None)
 }
 
+async fn run_python_lyrics_worker(
+    mode: &str,
+    offset: f64,
+    artist: &str,
+    title: &str,
+    stdin_content: Option<&str>,
+) -> Option<String> {
+    let mut child = Command::new(".venv/bin/python3")
+        .arg("src/lyrics_worker.py")
+        .arg(mode)
+        .arg(offset.to_string())
+        .arg(artist)
+        .arg(title)
+        .stdin(if stdin_content.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        })
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    if let Some(content) = stdin_content {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(content.as_bytes()).await;
+            let _ = stdin.flush().await;
+        }
+    }
+
+    let output = child.wait_with_output().await.ok()?;
+    if output.status.success() {
+        let stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
+        if !stdout_str.trim().is_empty() {
+            return Some(stdout_str);
+        }
+    }
+    None
+}
+
 async fn romanize_lrc(
     synced_lrc: &str,
     artist: &str,
@@ -432,18 +441,33 @@ async fn romanize_lrc(
         _ => None,
     };
     
-    let aligner = Aligner::new(reference_lyrics.as_deref().unwrap_or(""));
-    let mut current_ptr = 0;
-    let mut output = String::new();
-    
-    let re_timestamp = regex::Regex::new(r"^(\[[0-9:.]+\])(.*)").unwrap();
-    
     let mut romanizer = PythonRomanizer::new().await;
     if romanizer.is_some() {
         let _ = tx.send(AppEvent::ProcessingLog("[>] Using Python cutlet romanizer worker...".to_string())).await;
     } else {
         let _ = tx.send(AppEvent::ProcessingLog("[!] Python romanizer worker not available. Using kakasi fallback...".to_string())).await;
     }
+
+    let mut reference_lines = Vec::new();
+    let mut reference_norms = Vec::new();
+    
+    if let Some(ref_lyr) = reference_lyrics {
+        for line in ref_lyr.lines() {
+            let line = line.trim();
+            if !line.is_empty() && !(line.starts_with('[') && line.ends_with(']')) {
+                let cleaned_line = line.replace('\u{2005}', " ").replace('\u{200b}', "");
+                let norm = normalize_text(&cleaned_line, &mut romanizer).await;
+                reference_norms.push(norm);
+                reference_lines.push(cleaned_line);
+            }
+        }
+    }
+    
+    let aligner = Aligner::new(reference_lines, reference_norms);
+    let mut current_ptr = 0;
+    let mut output = String::new();
+    
+    let re_timestamp = regex::Regex::new(r"^(\[[0-9:.]+\])(.*)").unwrap();
     
     for line in synced_lrc.lines() {
         if let Some(caps) = re_timestamp.captures(line) {
@@ -517,21 +541,33 @@ pub async fn fetch_and_save_lyrics(
         
         if contains_japanese(&synced) {
             let _ = tx.send(AppEvent::ProcessingLog("[>] Japanese lyrics detected. Romanizing...".to_string())).await;
-            romanize_lrc(&synced, clean_artist, clean_track, offset, client, tx.clone()).await
+            if let Some(res) = run_python_lyrics_worker("process", offset, clean_artist, clean_track, Some(&synced)).await {
+                let _ = tx.send(AppEvent::ProcessingLog("[+] Processed lyrics using Python lyrics worker.".to_string())).await;
+                res
+            } else {
+                let _ = tx.send(AppEvent::ProcessingLog("[!] Python worker not available or failed. Using Rust fallback...".to_string())).await;
+                romanize_lrc(&synced, clean_artist, clean_track, offset, client, tx.clone()).await
+            }
         } else {
             let _ = tx.send(AppEvent::ProcessingLog("[>] Shifting timestamps to match audio...".to_string())).await;
             shift_lrc_timestamps(&synced, offset)
         }
     } else {
         let _ = tx.send(AppEvent::ProcessingLog("[!] Synced lyrics not found on LRCLIB. Trying Genius fallback...".to_string())).await;
-        match fetch_genius_lyrics(client, clean_artist, clean_track, tx.clone()).await {
-            Ok(Some(genius_lyrics)) => {
-                let _ = tx.send(AppEvent::ProcessingLog("[+] Plain lyrics found on Genius.".to_string())).await;
-                format!("[ar:{}]\n[al:{}]\n[ti:{}]\n{}", artist, album, title, genius_lyrics)
-            }
-            _ => {
-                let _ = tx.send(AppEvent::ProcessingLog("[!] No lyrics found on Genius. Skipping.".to_string())).await;
-                return Ok(());
+        if let Some(res) = run_python_lyrics_worker("fetch", 0.0, clean_artist, clean_track, None).await {
+            let _ = tx.send(AppEvent::ProcessingLog("[+] Found lyrics on Genius via Python worker.".to_string())).await;
+            format!("[ar:{}]\n[al:{}]\n[ti:{}]\n{}", artist, album, title, res)
+        } else {
+            let _ = tx.send(AppEvent::ProcessingLog("[!] Python worker fallback failed or not found. Trying Rust Genius search...".to_string())).await;
+            match fetch_genius_lyrics(client, clean_artist, clean_track, tx.clone()).await {
+                Ok(Some(genius_lyrics)) => {
+                    let _ = tx.send(AppEvent::ProcessingLog("[+] Plain lyrics found on Genius.".to_string())).await;
+                    format!("[ar:{}]\n[al:{}]\n[ti:{}]\n{}", artist, album, title, genius_lyrics)
+                }
+                _ => {
+                    let _ = tx.send(AppEvent::ProcessingLog("[!] No lyrics found on Genius. Skipping.".to_string())).await;
+                    return Ok(());
+                }
             }
         }
     };
