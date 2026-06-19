@@ -1,6 +1,6 @@
 [music]
 # Directory where downloaded songs will be saved (can be relative or absolute)
-directory = "Music"
+directory = "~/Music"
 
 # Audio format for yt-dlp to extract (e.g. mp3, flac, m4a, opus)
 format = "mp3"

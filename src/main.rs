@@ -607,24 +607,42 @@ async fn run_pipeline(
     }
 
     // 4. MusicBrainz Query & Heuristic Filter
-    let (artist, album, title, mbid) = if let Some(mbid) = recording_mbid {
+    let mut resolved_metadata = None;
+    if let Some(mbid) = recording_mbid {
         let _ = tx.send(AppEvent::ProcessingLog(format!("[>] AcoustID match found (MBID: {}).", mbid))).await;
         match query_musicbrainz(&mbid, tx.clone()).await {
             Ok(Some((art, alb, tit, rel_mbid))) => {
-                (art, alb, tit, Some(rel_mbid))
+                resolved_metadata = Some((art, alb, tit, Some(rel_mbid), None));
             }
             Ok(None) => {
-                let _ = tx.send(AppEvent::ProcessingLog("[!] MusicBrainz query returned no releases matching heuristic. Falling back.".to_string())).await;
-                ("Unknown Artist".to_string(), "Unknown Album".to_string(), clean_youtube_title(&video.title), None)
+                let _ = tx.send(AppEvent::ProcessingLog("[!] MusicBrainz query returned no releases matching heuristic. Trying Spotify fallback...".to_string())).await;
             }
             Err(e) => {
-                let _ = tx.send(AppEvent::ProcessingLog(format!("[!] MusicBrainz query failed: {}. Falling back.", e))).await;
-                ("Unknown Artist".to_string(), "Unknown Album".to_string(), clean_youtube_title(&video.title), None)
+                let _ = tx.send(AppEvent::ProcessingLog(format!("[!] MusicBrainz query failed: {}. Trying Spotify fallback...", e))).await;
             }
         }
     } else {
-        let _ = tx.send(AppEvent::ProcessingLog("[!] No AcoustID match found. Falling back to Unknown.".to_string())).await;
-        ("Unknown Artist".to_string(), "Unknown Album".to_string(), clean_youtube_title(&video.title), None)
+        let _ = tx.send(AppEvent::ProcessingLog("[!] No AcoustID match found. Trying Spotify fallback...".to_string())).await;
+    }
+
+    let (artist, album, title, mbid, spotify_cover_url) = if let Some(meta) = resolved_metadata {
+        meta
+    } else {
+        let clean_title = clean_youtube_title(&video.title);
+        let _ = tx.send(AppEvent::ProcessingLog(format!("[>] Querying Spotify fallback for \"{}\"...", clean_title))).await;
+        match search_spotify_fallback(&clean_title).await {
+            Some(spotify_meta) => {
+                let _ = tx.send(AppEvent::ProcessingLog(format!(
+                    "[+] Spotify match found: \"{}\" - \"{}\" (Album: \"{}\").",
+                    spotify_meta.artist, spotify_meta.title, spotify_meta.album
+                ))).await;
+                (spotify_meta.artist, spotify_meta.album, spotify_meta.title, None, spotify_meta.cover_url)
+            }
+            None => {
+                let _ = tx.send(AppEvent::ProcessingLog("[!] Spotify fallback failed or returned no matches. Falling back to Unknown.".to_string())).await;
+                ("Unknown Artist".to_string(), "Unknown Album".to_string(), clean_title, None, None)
+            }
+        }
     };
 
     // Download album art/thumbnail
@@ -640,7 +658,22 @@ async fn run_pipeline(
                 art_data = Some((bytes, mime));
             }
             Err(e) => {
-                let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Cover Art Archive failed: {}. Falling back to YouTube thumbnail...", e))).await;
+                let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Cover Art Archive failed: {}. Falling back...", e))).await;
+            }
+        }
+    }
+
+    if art_data.is_none() {
+        if let Some(ref cover_url) = spotify_cover_url {
+            let _ = tx.send(AppEvent::ProcessingLog(format!("[>] Fetching Spotify album art from URL: {}...", cover_url))).await;
+            match download_url(&client, cover_url).await {
+                Ok((bytes, mime)) => {
+                    let _ = tx.send(AppEvent::ProcessingLog("[+] Album art fetched from Spotify.".to_string())).await;
+                    art_data = Some((bytes, mime));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Spotify cover fetch failed: {}. Falling back to YouTube thumbnail...", e))).await;
+                }
             }
         }
     }
@@ -746,6 +779,33 @@ async fn run_pipeline(
     }
 
     Ok(dest_file)
+}
+
+#[derive(Debug, Deserialize)]
+struct SpotifyMetadata {
+    artist: String,
+    album: String,
+    title: String,
+    cover_url: Option<String>,
+    #[allow(dead_code)]
+    release_date: Option<String>,
+}
+
+async fn search_spotify_fallback(query: &str) -> Option<SpotifyMetadata> {
+    let output = tokio::process::Command::new(".venv/bin/python3")
+        .arg("src/spotify_fallback.py")
+        .arg(query)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .await
+        .ok()?;
+
+    if output.status.success() {
+        serde_json::from_slice(&output.stdout).ok()
+    } else {
+        None
+    }
 }
 
 async fn query_musicbrainz(
