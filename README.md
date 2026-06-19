@@ -10,17 +10,17 @@
   - Uses `fpcalc` to generate acoustic fingerprints.
   - Queries the **AcoustID API** to fetch the MusicBrainz Recording ID.
   - Queries the **MusicBrainz API** to match the best official release (Album/Single) based on heuristics.
-  - 🟢 **Spotify Fallback Search**: If AcoustID/MusicBrainz fails, the tool automatically searches Spotify using the cleaned video title (using `SpotipyFree`, zero API-key setup required).
+  - Falls back to Spotify search if AcoustID/MusicBrainz lookup fails (using `SpotipyFree`).
 - 🎨 **Album Art Retrieval & Embedding**:
   - Fetches official cover art from the **Cover Art Archive** using MusicBrainz release data.
-  - Automatically falls back to fetching the cover art from Spotify if the Spotify fallback search was triggered.
+  - Falls back to fetching cover art from Spotify if the Spotify fallback was triggered.
   - Falls back to the highest quality YouTube thumbnail (`maxresdefault` / `hqdefault`) if no official cover is found.
   - Saves the cover image (`cover.jpg`/`cover.png`) directly into the album directory.
   - Embeds the album art directly into the MP3 ID3v2 metadata.
 - 🏷️ **Auto Tagging**: Writes ID3v2 tags (Title, Artist, Album) using the `lofty` crate.
 - 📁 **Folder Organization**: Neatly saves downloaded files following a `Music/<Artist>/<Album>/<Title>.mp3` directory structure.
-- 💾 **Smart Cache Skipping**: Saves download metadata at `cache/{video_id}.json`. If you re-download the same video, it checks if both the audio file and its matching `.lrc` lyrics file still exist. If they do, it skips downloading and processing instantly. If either is missing, it automatically re-runs.
-- 🎶 **Smart Lyrics Romanization & Auto-Offset**: Detects Japanese text in synced lyrics (LRCLIB), fetches reference lyrics from Genius, and translates/romanizes Japanese text using a Python `cutlet`/`kakasi` alignment process (with a strict similarity threshold of 0.55 to prevent line-skips). It also automatically shifts timestamps based on the duration difference to match the YouTube audio timeline perfectly.
+- 💾 **Local Cache**: Caches download records at `cache/{video_id}.json`. Re-downloading the same video will be skipped if both the audio and `.lrc` files still exist.
+- 🎶 **Lyrics Romanization & Alignment**: Detects Japanese text in synced lyrics (LRCLIB), matches them against Genius lyrics using Romaji normalization, and shifts timestamps based on duration offsets.
 
 ## Prerequisites 🛠️
 
