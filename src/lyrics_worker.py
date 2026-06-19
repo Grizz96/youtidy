@@ -156,7 +156,7 @@ class Aligner:
                 best_match = g_line
                 best_idx = i
 
-        if max_score > 0.4:
+        if max_score > 0.55:
             return best_match, best_idx
         return None, current_idx
 

@@ -157,7 +157,7 @@ impl Aligner {
             }
         }
         
-        if max_score > 0.4 {
+        if max_score > 0.55 {
             (best_match, best_idx)
         } else {
             (None, current_idx)
