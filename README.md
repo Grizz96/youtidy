@@ -73,14 +73,15 @@ It is highly recommended to use a package manager like [Scoop](https://scoop.sh/
 
 ## Configuration ⚙️
 
-The application requires an **AcoustID** API Key.
+The application requires an **AcoustID** API Key and optionally a **Genius** Access Token (for Japanese lyrics romanization fallbacks):
 
-1. Get a free API Key (Client ID) by logging in with your MusicBrainz account at [AcoustID](https://acoustid.org/login).
-2. Create an `.env` file in the project root and add your Client ID:
+1. **AcoustID**: Get a free API Key (Client ID) by logging in with your MusicBrainz account at [AcoustID](https://acoustid.org/login).
+2. **Genius**: Register a new API client at the [Genius Developer Portal](https://genius.com/api-clients) and generate a **Client Access Token**.
+3. Create an `.env` file in the project root and add them:
 
 ```env
 ACOUSTID_CLIENT_ID=your_acoustid_client_id_here
-
+GENIUS_ACCESS_TOKEN=your_genius_access_token_here
 ```
 
 ## Usage 🚀
