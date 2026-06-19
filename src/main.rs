@@ -511,11 +511,39 @@ async fn search_youtube(query: &str) -> Result<Vec<SearchResult>, Box<dyn Error 
     Ok(results)
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct CacheRecord {
+    dest_path: String,
+}
+
 async fn run_pipeline(
     video: SearchResult,
     tx: tokio::sync::mpsc::Sender<AppEvent>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let format = env::var("YOUTIDY_FORMAT").unwrap_or_else(|_| "mp3".to_string());
+    
+    // Check cache first
+    let cache_record_path = format!("cache/{}.json", video.id);
+    let cache_path = std::path::Path::new(&cache_record_path);
+    if cache_path.exists() {
+        if let Ok(cache_content) = std::fs::read_to_string(cache_path) {
+            if let Ok(record) = serde_json::from_str::<CacheRecord>(&cache_content) {
+                let dest_path = std::path::Path::new(&record.dest_path);
+                if dest_path.exists() {
+                    let _ = tx.send(AppEvent::ProcessingLog(format!(
+                        "[>] Cache hit: song already downloaded. Found at: {}",
+                        record.dest_path
+                    ))).await;
+                    return Ok(record.dest_path);
+                } else {
+                    let _ = tx.send(AppEvent::ProcessingLog(format!(
+                        "[!] Cache found but destination file has been deleted/moved. Re-downloading..."
+                    ))).await;
+                }
+            }
+        }
+    }
+
     let temp_filename = format!("cache/temp_download.{}", format);
     let temp_path = std::path::Path::new(&temp_filename);
 
@@ -776,6 +804,17 @@ async fn run_pipeline(
         tx.clone(),
     ).await {
         let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Lyrics lookup skipped/failed: {}", e))).await;
+    }
+
+    // Save cache record
+    let record = CacheRecord {
+        dest_path: dest_file.clone(),
+    };
+    if let Ok(serialized) = serde_json::to_string(&record) {
+        let cache_record_path = format!("cache/{}.json", video.id);
+        if let Err(e) = std::fs::write(&cache_record_path, serialized) {
+            let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Warning: failed to save cache record: {}", e))).await;
+        }
     }
 
     Ok(dest_file)
