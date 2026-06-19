@@ -23,6 +23,9 @@ def get_genius_api():
             import lyricsgenius
 
             genius_api = lyricsgenius.Genius(TOKEN, remove_section_headers=False)
+            user_agent = os.environ.get("YOUTIDY_USER_AGENT")
+            if user_agent:
+                genius_api.session.headers.update({"User-Agent": user_agent})
             genius_api.verbose = False
         except ImportError:
             return None

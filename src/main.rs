@@ -235,6 +235,29 @@ fn load_config() {
                     if let Some(cache_d) = music.get("cache_directory").and_then(|v| v.as_str()) {
                         unsafe { env::set_var("YOUTIDY_CACHE_DIR", cache_d); }
                     }
+                    if let Some(bitrate) = music.get("bitrate") {
+                        if let Some(b_int) = bitrate.as_integer() {
+                            unsafe { env::set_var("YOUTIDY_BITRATE", b_int.to_string()); }
+                        } else if let Some(b_str) = bitrate.as_str() {
+                            unsafe { env::set_var("YOUTIDY_BITRATE", b_str); }
+                        }
+                    }
+                    if let Some(quality) = music.get("audio_quality") {
+                        if let Some(q_int) = quality.as_integer() {
+                            unsafe { env::set_var("YOUTIDY_AUDIO_QUALITY", q_int.to_string()); }
+                        } else if let Some(q_str) = quality.as_str() {
+                            unsafe { env::set_var("YOUTIDY_AUDIO_QUALITY", q_str); }
+                        }
+                    }
+                    if let Some(folder_struct) = music.get("folder_structure").and_then(|v| v.as_str()) {
+                        unsafe { env::set_var("YOUTIDY_FOLDER_STRUCTURE", folder_struct); }
+                    }
+                    if let Some(file_temp) = music.get("filename_template").and_then(|v| v.as_str()) {
+                        unsafe { env::set_var("YOUTIDY_FILENAME_TEMPLATE", file_temp); }
+                    }
+                    if let Some(emb_lyr) = music.get("embed_lyrics").and_then(|v| v.as_bool()) {
+                        unsafe { env::set_var("YOUTIDY_EMBED_LYRICS", emb_lyr.to_string()); }
+                    }
                 }
                 if let Some(api) = config.get("api").and_then(|v| v.as_table()) {
                     if let Some(id) = api.get("acoustid_client_id").and_then(|v| v.as_str()) {
@@ -244,7 +267,47 @@ fn load_config() {
                         unsafe { env::set_var("GENIUS_ACCESS_TOKEN", tok); }
                     }
                 }
+                if let Some(tui) = config.get("tui").and_then(|v| v.as_table())
+                    && let Some(limit) = tui.get("search_limit") {
+                        if let Some(l_int) = limit.as_integer() {
+                            unsafe { env::set_var("YOUTIDY_SEARCH_LIMIT", l_int.to_string()); }
+                        } else if let Some(l_str) = limit.as_str() {
+                            unsafe { env::set_var("YOUTIDY_SEARCH_LIMIT", l_str); }
+                        }
+                    }
+                if let Some(network) = config.get("network").and_then(|v| v.as_table()) {
+                    if let Some(ua) = network.get("user_agent").and_then(|v| v.as_str()) {
+                        unsafe { env::set_var("YOUTIDY_USER_AGENT", ua); }
+                    }
+                    if let Some(proxy) = network.get("proxy").and_then(|v| v.as_str()) {
+                        unsafe {
+                            env::set_var("YOUTIDY_PROXY", proxy);
+                            env::set_var("HTTP_PROXY", proxy);
+                            env::set_var("HTTPS_PROXY", proxy);
+                            env::set_var("http_proxy", proxy);
+                            env::set_var("https_proxy", proxy);
+                        }
+                    }
+                }
             }
+}
+
+fn build_http_client() -> Result<reqwest::Client, Box<dyn Error + Send + Sync>> {
+    let mut builder = reqwest::Client::builder();
+    
+    let user_agent = env::var("YOUTIDY_USER_AGENT")
+        .unwrap_or_else(|_| "youtidy/1.0.0 ( github.com/Grizz96/youtidy )".to_string());
+    if !user_agent.trim().is_empty() {
+        builder = builder.user_agent(user_agent);
+    }
+    
+    if let Ok(proxy_str) = env::var("YOUTIDY_PROXY")
+        && !proxy_str.trim().is_empty() {
+            let proxy = reqwest::Proxy::all(proxy_str)?;
+            builder = builder.proxy(proxy);
+        }
+    
+    Ok(builder.build()?)
 }
 
 fn check_dependencies() -> Result<(), Box<dyn Error>> {
@@ -476,12 +539,24 @@ where
 }
 
 async fn search_youtube(query: &str) -> Result<Vec<SearchResult>, Box<dyn Error + Send + Sync>> {
-    let output = tokio::process::Command::new("yt-dlp")
-        .arg(format!("ytsearch10:{}", query))
-        .arg("-J")
-        .arg("--flat-playlist")
-        .output()
-        .await?;
+    let limit = env::var("YOUTIDY_SEARCH_LIMIT").unwrap_or_else(|_| "10".to_string());
+    
+    let mut cmd = tokio::process::Command::new("yt-dlp");
+    cmd.arg(format!("ytsearch{}:{}", limit, query))
+       .arg("-J")
+       .arg("--flat-playlist");
+
+    if let Ok(proxy) = env::var("YOUTIDY_PROXY")
+        && !proxy.trim().is_empty() {
+            cmd.arg("--proxy").arg(&proxy);
+        }
+
+    if let Ok(ua) = env::var("YOUTIDY_USER_AGENT")
+        && !ua.trim().is_empty() {
+            cmd.arg("--user-agent").arg(&ua);
+        }
+
+    let output = cmd.output().await?;
 
     if !output.status.success() {
         let err_str = String::from_utf8_lossy(&output.stderr);
@@ -549,15 +624,40 @@ async fn run_pipeline(
         let _ = std::fs::remove_file(temp_path);
     }
 
-    let output = tokio::process::Command::new("yt-dlp")
-        .arg("-x")
-        .arg("--audio-format")
-        .arg(&format)
-        .arg("-o")
-        .arg(format!("{}/temp_download.%(ext)s", cache_dir))
-        .arg(&video.url)
-        .output()
-        .await?;
+    let mut cmd = tokio::process::Command::new("yt-dlp");
+    cmd.arg("-x")
+       .arg("--audio-format")
+       .arg(&format);
+
+    // Apply bitrate/quality
+    if let Ok(bitrate) = env::var("YOUTIDY_BITRATE")
+        && !bitrate.trim().is_empty() {
+            let cleaned = bitrate.trim().to_uppercase();
+            if cleaned.chars().all(|c| c.is_ascii_digit()) {
+                cmd.arg("--audio-quality").arg(format!("{}K", cleaned));
+            } else {
+                cmd.arg("--audio-quality").arg(&bitrate);
+            }
+        } else if let Ok(quality) = env::var("YOUTIDY_AUDIO_QUALITY")
+            && !quality.trim().is_empty() {
+                cmd.arg("--audio-quality").arg(&quality);
+            }
+
+    // Network options
+    if let Ok(proxy) = env::var("YOUTIDY_PROXY")
+        && !proxy.trim().is_empty() {
+            cmd.arg("--proxy").arg(&proxy);
+        }
+    if let Ok(ua) = env::var("YOUTIDY_USER_AGENT")
+        && !ua.trim().is_empty() {
+            cmd.arg("--user-agent").arg(&ua);
+        }
+
+    cmd.arg("-o")
+       .arg(format!("{}/temp_download.%(ext)s", cache_dir))
+       .arg(&video.url);
+
+    let output = cmd.output().await?;
 
     if !output.status.success() {
         let err_str = String::from_utf8_lossy(&output.stderr);
@@ -591,9 +691,7 @@ async fn run_pipeline(
     let client_id = env::var("ACOUSTID_CLIENT_ID")
         .map_err(|_| "ACOUSTID_CLIENT_ID environment variable not set")?;
 
-    let client = reqwest::Client::builder()
-        .user_agent("youtidy/1.0.0 ( github.com/Grizz96/youtidy )")
-        .build()?;
+    let client = build_http_client()?;
     let response = client
         .post("https://api.acoustid.org/v2/lookup")
         .form(&[
@@ -722,7 +820,76 @@ async fn run_pipeline(
         }
     }
 
-    // 5. Tag with lofty (ID3v2)
+    // Compute destination folder and filename
+    let clean_artist = sanitize_path_segment(&artist);
+    let clean_album = sanitize_path_segment(&album);
+    let clean_title = sanitize_path_segment(&title);
+
+    let folder_structure = env::var("YOUTIDY_FOLDER_STRUCTURE")
+        .unwrap_or_else(|_| "{artist}/{album}".to_string());
+    let filename_template = env::var("YOUTIDY_FILENAME_TEMPLATE")
+        .unwrap_or_else(|_| "{title}".to_string());
+
+    let folder_relative = folder_structure
+        .replace("{artist}", &clean_artist)
+        .replace("{album}", &clean_album)
+        .replace("{title}", &clean_title);
+
+    let filename = filename_template
+        .replace("{artist}", &clean_artist)
+        .replace("{album}", &clean_album)
+        .replace("{title}", &clean_title);
+
+    let base_music_dir = env::var("YOUTIDY_MUSIC_DIR").unwrap_or_else(|_| "Music".to_string());
+    let dest_dir = format!("{}/{}", base_music_dir, folder_relative);
+    std::fs::create_dir_all(&dest_dir)?;
+
+    let save_cover = env::var("YOUTIDY_SAVE_COVER_FILE")
+        .map(|v| v.parse::<bool>().unwrap_or(true))
+        .unwrap_or(true);
+
+    if save_cover {
+        if let Some((ref bytes, ref mime)) = art_data {
+            let ext = mime.ext().unwrap_or("jpg");
+            let cover_path = format!("{}/cover.{}", dest_dir, ext);
+            if let Err(e) = std::fs::write(&cover_path, bytes) {
+                let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Warning: failed to save cover art file: {}", e))).await;
+            } else {
+                let _ = tx.send(AppEvent::ProcessingLog(format!("[>] Saved cover art to: {}", cover_path))).await;
+            }
+        }
+    } else {
+        let _ = tx.send(AppEvent::ProcessingLog("[>] Skipping saving standalone cover art file (embed only).".to_string())).await;
+    }
+
+    let dest_file = format!("{}/{}.{}", dest_dir, filename, format);
+
+    // 5. Fetch and save lyrics
+    let mut lyrics_content = None;
+    if let Err(e) = lyrics::fetch_and_save_lyrics(
+        &client,
+        &artist,
+        &title,
+        &album,
+        duration,
+        &dest_dir,
+        &filename,
+        tx.clone(),
+    ).await {
+        let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Lyrics lookup skipped/failed: {}", e))).await;
+    } else {
+        let embed_lyrics = env::var("YOUTIDY_EMBED_LYRICS")
+            .map(|v| v.parse::<bool>().unwrap_or(false))
+            .unwrap_or(false);
+        if embed_lyrics {
+            let lrc_path = format!("{}/{}.lrc", dest_dir, filename);
+            if let Ok(lrc) = std::fs::read_to_string(&lrc_path) {
+                lyrics_content = Some(lrc);
+            }
+        }
+    }
+
+    // 6. Tag with lofty (ID3v2)
     let _ = tx.send(AppEvent::ProcessingLog(format!(
         "[>] Writing tags: Artist='{}', Album='{}', Title='{}'...",
         artist, album, title
@@ -744,6 +911,11 @@ async fn run_pipeline(
     tag.set_artist(artist.clone());
     tag.set_album(album.clone());
 
+    if let Some(lrc) = lyrics_content {
+        let _ = tx.send(AppEvent::ProcessingLog("[>] Embedding lyrics into file tags...".to_string())).await;
+        tag.insert_text(lofty::tag::ItemKey::Lyrics, lrc);
+    }
+
     if let Some((ref bytes, ref mime)) = art_data {
         let _ = tx.send(AppEvent::ProcessingLog("[>] Embedding album art into file tags...".to_string())).await;
         tag.remove_picture_type(PictureType::CoverFront);
@@ -757,53 +929,11 @@ async fn run_pipeline(
     tagged_file.save_to_path(&temp_filename, lofty::config::WriteOptions::default())?;
     let _ = tx.send(AppEvent::ProcessingLog("[>] Tagging complete.".to_string())).await;
 
-    // 6. Move to final destination
-    let clean_artist = sanitize_path_segment(&artist);
-    let clean_album = sanitize_path_segment(&album);
-    let clean_title = sanitize_path_segment(&title);
-
-    let base_music_dir = env::var("YOUTIDY_MUSIC_DIR").unwrap_or_else(|_| "Music".to_string());
-    let dest_dir = format!("{}/{}/{}", base_music_dir, clean_artist, clean_album);
-    std::fs::create_dir_all(&dest_dir)?;
-
-    let save_cover = env::var("YOUTIDY_SAVE_COVER_FILE")
-        .map(|v| v.parse::<bool>().unwrap_or(true))
-        .unwrap_or(true);
-
-    if save_cover {
-        if let Some((ref bytes, ref mime)) = art_data {
-            let ext = mime.ext().unwrap_or("jpg");
-            let cover_path = format!("{}/cover.{}", dest_dir, ext);
-            if let Err(e) = std::fs::write(&cover_path, bytes) {
-                let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Warning: failed to save cover art file: {}", e))).await;
-            } else {
-                let _ = tx.send(AppEvent::ProcessingLog(format!("[>] Saved cover art to: {}", cover_path))).await;
-            }
-        }
-    } else {
-        let _ = tx.send(AppEvent::ProcessingLog("[>] Skipping saving standalone cover art file (embed only).".to_string())).await;
-    }
-
-    let dest_file = format!("{}/{}.{}", dest_dir, clean_title, format);
-    
+    // 7. Move to final destination
     std::fs::copy(&temp_filename, &dest_file)?;
     std::fs::remove_file(&temp_filename)?;
     
     let _ = tx.send(AppEvent::ProcessingLog(format!("[>] File saved to destination: {}", dest_file))).await;
-
-    // 7. Fetch and save lyrics
-    if let Err(e) = lyrics::fetch_and_save_lyrics(
-        &client,
-        &artist,
-        &title,
-        &album,
-        duration,
-        &dest_dir,
-        &clean_title,
-        tx.clone(),
-    ).await {
-        let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Lyrics lookup skipped/failed: {}", e))).await;
-    }
 
     // Save cache record
     let record = CacheRecord {
@@ -856,9 +986,7 @@ async fn query_musicbrainz(
 
     let _ = tx.send(AppEvent::ProcessingLog(format!("[>] Querying MusicBrainz for MBID: {}...", recording_mbid))).await;
 
-    let client = reqwest::Client::builder()
-        .user_agent("youtidy/1.0.0 ( github.com/Grizz96/youtidy )")
-        .build()?;
+    let client = build_http_client()?;
 
     let url = format!(
         "https://musicbrainz.org/ws/2/recording/{}?inc=releases+release-groups+artists&fmt=json",

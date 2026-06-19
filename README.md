@@ -73,16 +73,32 @@ It is highly recommended to use a package manager like [Scoop](https://scoop.sh/
 
 ## Configuration ⚙️
 
-The application requires an **AcoustID** API Key and optionally a **Genius** Access Token (for Japanese lyrics romanization fallbacks):
+The application reads configurations from `config.toml` in the current directory or `~/.config/youtidy/config.toml`. Create a `config.toml` using `config.example.toml` as a reference.
 
-1. **AcoustID**: Get a free API Key (Client ID) by logging in with your MusicBrainz account at [AcoustID](https://acoustid.org/login).
-2. **Genius**: Register a new API client at the [Genius Developer Portal](https://genius.com/api-clients) and generate a **Client Access Token**.
-3. Create an `.env` file in the project root and add them:
+### Environment Variables & Credentials
+- **AcoustID**: Register at [AcoustID](https://acoustid.org/login) to get a Client ID. Add it as `acoustid_client_id` under `[api]` in `config.toml` or `ACOUSTID_CLIENT_ID` in `.env`.
+- **Genius**: (Optional, for lyrics scraping fallbacks) Register at the [Genius Developer Portal](https://genius.com/api-clients) to get an access token. Add it as `genius_access_token` under `[api]` in `config.toml` or `GENIUS_ACCESS_TOKEN` in `.env`.
 
-```env
-ACOUSTID_CLIENT_ID=your_acoustid_client_id_here
-GENIUS_ACCESS_TOKEN=your_genius_access_token_here
-```
+### Configurable Options
+Configure these sections in your `config.toml`:
+
+#### `[music]`
+- `directory`: Base music directory to save tracks (e.g., `~/Music`).
+- `format`: Audio file format (e.g., `mp3`).
+- `save_cover_file`: If `true`, saves the cover image file in the album directory.
+- `cache_directory`: Cache path for temporary downloads.
+- `bitrate`: Specific target bitrate (e.g. `320k`, `192k`).
+- `audio_quality`: ffmpeg VBR audio quality option (0-9, where 0 is best).
+- `folder_structure`: Custom output path format (e.g. `{artist}/{album}`).
+- `filename_template`: Custom filename template (e.g. `{title}` or `{artist} - {title}`).
+- `embed_lyrics`: If `true`, embeds lyrics directly in the audio metadata tag.
+
+#### `[tui]`
+- `search_limit`: Maximum number of search results returned from YouTube (default: `10`).
+
+#### `[network]`
+- `proxy`: Custom proxy URL (e.g. `http://127.0.0.1:7890`) for API requests and downloads.
+- `user_agent`: Custom User-Agent header string.
 
 ## Usage 🚀
 

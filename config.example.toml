@@ -11,9 +11,35 @@ save_cover_file = true
 # Directory where temporary files and download caches are saved
 cache_directory = "cache"
 
+# Optional: Audio quality to pass to yt-dlp/ffmpeg (0-9 for VBR, where 0 is best, default: 5)
+# audio_quality = 5
+
+# Optional: Specific audio bitrate (e.g. "320", "192", or "320k")
+# bitrate = "320k"
+
+# Custom folder structure template using placeholders: {artist}, {album}, {title}
+# folder_structure = "{artist}/{album}"
+
+# Custom filename template using placeholders: {artist}, {album}, {title}
+# filename_template = "{title}"
+
+# Whether to embed lyrics directly into the audio file tags (ID3v2)
+embed_lyrics = false
+
 [api]
 # AcoustID Client ID for audio fingerprinting
 acoustid_client_id = "your_acoustid_client_id_here"
 
 # Genius access token for lyrics scraping
 genius_access_token = "your_genius_access_token_here"
+
+[tui]
+# Limit for YouTube search results (default: 10)
+search_limit = 10
+
+[network]
+# Custom User-Agent header for HTTP requests and yt-dlp
+# user_agent = "your_custom_user_agent_here"
+
+# Custom Proxy URL to route requests through (e.g., "http://127.0.0.1:7890")
+# proxy = "http://your_proxy_here"
