@@ -520,14 +520,15 @@ async fn run_pipeline(
         && let Ok(cache_content) = std::fs::read_to_string(cache_path)
             && let Ok(record) = serde_json::from_str::<CacheRecord>(&cache_content) {
                 let dest_path = std::path::Path::new(&record.dest_path);
-                if dest_path.exists() {
+                let lrc_path = dest_path.with_extension("lrc");
+                if dest_path.exists() && lrc_path.exists() {
                     let _ = tx.send(AppEvent::ProcessingLog(format!(
-                        "[>] Cache hit: song already downloaded. Found at: {}",
+                        "[>] Cache hit: song and lyrics already downloaded. Found at: {}",
                         record.dest_path
                     ))).await;
                     return Ok(record.dest_path);
                 } else {
-                    let _ = tx.send(AppEvent::ProcessingLog("[!] Cache found but destination file has been deleted/moved. Re-downloading...".to_string())).await;
+                    let _ = tx.send(AppEvent::ProcessingLog("[!] Cache found but audio or lyrics file is missing. Re-downloading...".to_string())).await;
                 }
             }
 
