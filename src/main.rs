@@ -219,9 +219,9 @@ fn load_config() {
         }
     }
 
-    if config_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&config_path) {
-            if let Ok(config) = content.parse::<toml::Table>() {
+    if config_path.exists()
+        && let Ok(content) = std::fs::read_to_string(&config_path)
+            && let Ok(config) = content.parse::<toml::Table>() {
                 if let Some(music) = config.get("music").and_then(|v| v.as_table()) {
                     if let Some(dir) = music.get("directory").and_then(|v| v.as_str()) {
                         unsafe { env::set_var("YOUTIDY_MUSIC_DIR", dir); }
@@ -239,8 +239,6 @@ fn load_config() {
                     }
                 }
             }
-        }
-    }
 }
 
 fn check_dependencies() -> Result<(), Box<dyn Error>> {
@@ -315,12 +313,8 @@ where
     // Spawn thread to read crossterm events and send them to the channel
     let keys_tx = event_tx.clone();
     std::thread::spawn(move || {
-        loop {
-            if let Ok(ev) = event::read() {
-                if keys_tx.blocking_send(AppEvent::Input(ev)).is_err() {
-                    break;
-                }
-            } else {
+        while let Ok(ev) = event::read() {
+            if keys_tx.blocking_send(AppEvent::Input(ev)).is_err() {
                 break;
             }
         }
@@ -402,19 +396,18 @@ where
                                         app.next();
                                     }
                                 }
-                                KeyCode::Up => {
-                                    if app.state == AppState::Selecting && !app.is_searching {
+                                KeyCode::Up
+                                    if app.state == AppState::Selecting && !app.is_searching => {
                                         app.previous();
                                     }
-                                }
                                 _ => {}
                             }
                         }
                     }
                     Event::Mouse(mouse) => {
-                        if mouse.kind == MouseEventKind::Down(event::MouseButton::Left) {
-                            if app.state == AppState::Selecting && !app.is_searching {
-                                if let Some(selected) = app.on_click(mouse.row) {
+                        if mouse.kind == MouseEventKind::Down(event::MouseButton::Left)
+                            && app.state == AppState::Selecting && !app.is_searching
+                                && let Some(selected) = app.on_click(mouse.row) {
                                     app.selected_video = Some(selected.clone());
                                     app.state = AppState::Processing;
                                     app.logs.clear();
@@ -432,8 +425,6 @@ where
                                         }
                                     });
                                 }
-                            }
-                        }
                     }
                     _ => {}
                 }
@@ -525,9 +516,9 @@ async fn run_pipeline(
     // Check cache first
     let cache_record_path = format!("cache/{}.json", video.id);
     let cache_path = std::path::Path::new(&cache_record_path);
-    if cache_path.exists() {
-        if let Ok(cache_content) = std::fs::read_to_string(cache_path) {
-            if let Ok(record) = serde_json::from_str::<CacheRecord>(&cache_content) {
+    if cache_path.exists()
+        && let Ok(cache_content) = std::fs::read_to_string(cache_path)
+            && let Ok(record) = serde_json::from_str::<CacheRecord>(&cache_content) {
                 let dest_path = std::path::Path::new(&record.dest_path);
                 if dest_path.exists() {
                     let _ = tx.send(AppEvent::ProcessingLog(format!(
@@ -536,13 +527,9 @@ async fn run_pipeline(
                     ))).await;
                     return Ok(record.dest_path);
                 } else {
-                    let _ = tx.send(AppEvent::ProcessingLog(format!(
-                        "[!] Cache found but destination file has been deleted/moved. Re-downloading..."
-                    ))).await;
+                    let _ = tx.send(AppEvent::ProcessingLog("[!] Cache found but destination file has been deleted/moved. Re-downloading...".to_string())).await;
                 }
             }
-        }
-    }
 
     let temp_filename = format!("cache/temp_download.{}", format);
     let temp_path = std::path::Path::new(&temp_filename);
@@ -619,20 +606,17 @@ async fn run_pipeline(
     }
 
     let mut recording_mbid = None;
-    if response.status().is_success() {
-        if let Ok(acoustid_res) = response.json::<AcoustIdResponse>().await {
-            if acoustid_res.status == "ok" {
+    if response.status().is_success()
+        && let Ok(acoustid_res) = response.json::<AcoustIdResponse>().await
+            && acoustid_res.status == "ok" {
                 for result in acoustid_res.results {
-                    if let Some(recordings) = result.recordings {
-                        if let Some(first_rec) = recordings.first() {
+                    if let Some(recordings) = result.recordings
+                        && let Some(first_rec) = recordings.first() {
                             recording_mbid = Some(first_rec.id.clone());
                             break;
                         }
-                    }
                 }
             }
-        }
-    }
 
     // 4. MusicBrainz Query & Heuristic Filter
     let mut resolved_metadata = None;
@@ -691,8 +675,8 @@ async fn run_pipeline(
         }
     }
 
-    if art_data.is_none() {
-        if let Some(ref cover_url) = spotify_cover_url {
+    if art_data.is_none()
+        && let Some(ref cover_url) = spotify_cover_url {
             let _ = tx.send(AppEvent::ProcessingLog(format!("[>] Fetching Spotify album art from URL: {}...", cover_url))).await;
             match download_url(&client, cover_url).await {
                 Ok((bytes, mime)) => {
@@ -704,7 +688,6 @@ async fn run_pipeline(
                 }
             }
         }
-    }
 
     if art_data.is_none() {
         // Fallback to YouTube thumbnail
@@ -986,7 +969,7 @@ fn parse_date_to_sort_key(date_str: &str) -> String {
 }
 
 fn sanitize_path_segment(s: &str) -> String {
-    let clean = s.replace('/', "").replace('\\', "");
+    let clean = s.replace(['/', '\\'], "");
     let clean = clean.trim();
     if clean.is_empty() {
         "Unknown".to_string()

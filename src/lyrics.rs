@@ -10,10 +10,7 @@ struct LrclibResponse {
 }
 
 fn contains_japanese(text: &str) -> bool {
-    text.chars().any(|c| match c as u32 {
-        0x3040..=0x309F | 0x30A0..=0x30FF | 0x4E00..=0x9FFF => true,
-        _ => false,
-    })
+    text.chars().any(|c| matches!(c as u32, 0x3040..=0x309F | 0x30A0..=0x30FF | 0x4E00..=0x9FFF))
 }
 
 fn romanize_text_kakasi(text: &str) -> String {
@@ -230,14 +227,12 @@ async fn get_lrclib_synced_lyrics(
         .send()
         .await?;
         
-    if response.status().is_success() {
-        if let Ok(res) = response.json::<LrclibResponse>().await {
-            if let Some(synced) = res.synced_lyrics {
+    if response.status().is_success()
+        && let Ok(res) = response.json::<LrclibResponse>().await
+            && let Some(synced) = res.synced_lyrics {
                 let lrc_dur = res.duration.unwrap_or(duration);
                 return Ok(Some((synced, lrc_dur)));
             }
-        }
-    }
     
     // 2. Swapped GET without album name
     let mut url_no_album = reqwest::Url::parse("https://lrclib.net/api/get")?;
@@ -252,14 +247,12 @@ async fn get_lrclib_synced_lyrics(
         .send()
         .await?;
         
-    if response.status().is_success() {
-        if let Ok(res) = response.json::<LrclibResponse>().await {
-            if let Some(synced) = res.synced_lyrics {
+    if response.status().is_success()
+        && let Ok(res) = response.json::<LrclibResponse>().await
+            && let Some(synced) = res.synced_lyrics {
                 let lrc_dur = res.duration.unwrap_or(duration);
                 return Ok(Some((synced, lrc_dur)));
             }
-        }
-    }
     
     // 3. Search Fallback
     let mut search_url = reqwest::Url::parse("https://lrclib.net/api/search")?;
@@ -273,8 +266,8 @@ async fn get_lrclib_synced_lyrics(
         .send()
         .await?;
         
-    if response.status().is_success() {
-        if let Ok(results) = response.json::<Vec<LrclibResponse>>().await {
+    if response.status().is_success()
+        && let Ok(results) = response.json::<Vec<LrclibResponse>>().await {
             let mut candidates: Vec<LrclibResponse> = results.into_iter()
                 .filter(|r| r.synced_lyrics.is_some() && r.duration.is_some())
                 .collect();
@@ -290,7 +283,6 @@ async fn get_lrclib_synced_lyrics(
                 return Ok(Some((best.synced_lyrics.clone().unwrap(), best.duration.unwrap())));
             }
         }
-    }
     
     Ok(None)
 }
@@ -310,13 +302,11 @@ async fn query_genius_api(
         
     if response.status().is_success() {
         let json: serde_json::Value = response.json().await?;
-        if let Some(hits) = json["response"]["hits"].as_array() {
-            if !hits.is_empty() {
-                if let Some(url) = hits[0]["result"]["url"].as_str() {
+        if let Some(hits) = json["response"]["hits"].as_array()
+            && !hits.is_empty()
+                && let Some(url) = hits[0]["result"]["url"].as_str() {
                     return Ok(Some(url.to_string()));
                 }
-            }
-        }
     }
     Ok(None)
 }
@@ -324,6 +314,7 @@ async fn query_genius_api(
 fn clean_html_lyrics(html: &str) -> String {
     let mut lyrics = String::new();
     let re_container = regex::Regex::new(r#"(?s)<div[^>]*data-lyrics-container="true"[^>]*>(.*?)</div>"#).unwrap();
+    let re_tags = regex::Regex::new(r"<[^>]*>").unwrap();
     
     for cap in re_container.captures_iter(html) {
         let mut content = cap[1].to_string();
@@ -334,7 +325,6 @@ fn clean_html_lyrics(html: &str) -> String {
                           
         content = content.replace("</p>", "\n");
         
-        let re_tags = regex::Regex::new(r"<[^>]*>").unwrap();
         content = re_tags.replace_all(&content, "").to_string();
         
         content = content.replace("&amp;", "&")
@@ -417,12 +407,11 @@ async fn run_python_lyrics_worker(
         .spawn()
         .ok()?;
 
-    if let Some(content) = stdin_content {
-        if let Some(mut stdin) = child.stdin.take() {
+    if let Some(content) = stdin_content
+        && let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(content.as_bytes()).await;
             let _ = stdin.flush().await;
         }
-    }
 
     let output = child.wait_with_output().await.ok()?;
     if output.status.success() {
@@ -460,7 +449,7 @@ async fn romanize_lrc(
     if let Some(ref_lyr) = reference_lyrics {
         for line in ref_lyr.lines() {
             let line = line.trim();
-            if !line.is_empty() && !(line.starts_with('[') && line.ends_with(']')) {
+            if !(line.is_empty() || line.starts_with('[') && line.ends_with(']')) {
                 let cleaned_line = line.replace('\u{2005}', " ").replace('\u{200b}', "");
                 let norm = normalize_text(&cleaned_line, &mut romanizer).await;
                 reference_norms.push(norm);
@@ -518,12 +507,7 @@ async fn romanize_lrc(
 fn clean_query_name(name: &str) -> String {
     let mut cleaned = name
         .replace('　', " ")
-        .replace('「', "\"")
-        .replace('」', "\"")
-        .replace('『', "\"")
-        .replace('』', "\"")
-        .replace('【', "\"")
-        .replace('】', "\"");
+        .replace(['「', '」', '『', '』', '【', '】'], "\"");
 
     // Remove common metadata flags like (Official Video), (Music Video), [Lyrics], etc.
     if let Ok(re_brackets_meta) = regex::Regex::new(r"(?i)\s*[\(\[][^\]\)]*(official|lyrics?|lirik|video|music|audio|hd|4k|high quality|remastered|feat|ft|prod|opening|ending|theme|op|ed|ost|tv|full|special|movie|anime|eng|rom|kanji|mv|pv|karaoke|cover|テーマ)[^\]\)]*[\)\]]") {
@@ -548,6 +532,7 @@ fn clean_query_name(name: &str) -> String {
     cleaned.trim().to_string()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn fetch_and_save_lyrics(
     client: &reqwest::Client,
     artist: &str,
