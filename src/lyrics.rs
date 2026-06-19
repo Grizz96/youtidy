@@ -395,21 +395,19 @@ async fn run_python_lyrics_worker(
     let mut python_cmd = "python3".to_string();
     if std::path::Path::new(".venv/bin/python3").exists() {
         python_cmd = ".venv/bin/python3".to_string();
-    } else if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(exe_dir) = current_exe.parent() {
+    } else if let Ok(current_exe) = std::env::current_exe()
+        && let Some(exe_dir) = current_exe.parent() {
             let venv_py = exe_dir.join(".venv/bin/python3");
             if venv_py.exists() {
                 python_cmd = venv_py.to_string_lossy().to_string();
             } else {
                 let parent_venv = exe_dir.parent().map(|p| p.join(".venv/bin/python3"));
-                if let Some(ref p) = parent_venv {
-                    if p.exists() {
+                if let Some(ref p) = parent_venv
+                    && p.exists() {
                         python_cmd = p.to_string_lossy().to_string();
                     }
-                }
             }
         }
-    }
 
     // 2. Resolve lyrics_worker.py script path
     let mut script_path = "src/lyrics_worker.py".to_string();
@@ -417,8 +415,8 @@ async fn run_python_lyrics_worker(
         // use default
     } else if std::path::Path::new("lyrics_worker.py").exists() {
         script_path = "lyrics_worker.py".to_string();
-    } else if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(exe_dir) = current_exe.parent() {
+    } else if let Ok(current_exe) = std::env::current_exe()
+        && let Some(exe_dir) = current_exe.parent() {
             let exe_script = exe_dir.join("lyrics_worker.py");
             if exe_script.exists() {
                 script_path = exe_script.to_string_lossy().to_string();
@@ -429,7 +427,6 @@ async fn run_python_lyrics_worker(
                 }
             }
         }
-    }
 
     let mut child = Command::new(python_cmd)
         .arg(script_path)

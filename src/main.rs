@@ -229,6 +229,12 @@ fn load_config() {
                     if let Some(fmt) = music.get("format").and_then(|v| v.as_str()) {
                         unsafe { env::set_var("YOUTIDY_FORMAT", fmt); }
                     }
+                    if let Some(save_cov) = music.get("save_cover_file").and_then(|v| v.as_bool()) {
+                        unsafe { env::set_var("YOUTIDY_SAVE_COVER_FILE", save_cov.to_string()); }
+                    }
+                    if let Some(cache_d) = music.get("cache_directory").and_then(|v| v.as_str()) {
+                        unsafe { env::set_var("YOUTIDY_CACHE_DIR", cache_d); }
+                    }
                 }
                 if let Some(api) = config.get("api").and_then(|v| v.as_table()) {
                     if let Some(id) = api.get("acoustid_client_id").and_then(|v| v.as_str()) {
@@ -512,9 +518,10 @@ async fn run_pipeline(
     tx: tokio::sync::mpsc::Sender<AppEvent>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let format = env::var("YOUTIDY_FORMAT").unwrap_or_else(|_| "mp3".to_string());
+    let cache_dir = env::var("YOUTIDY_CACHE_DIR").unwrap_or_else(|_| "cache".to_string());
     
     // Check cache first
-    let cache_record_path = format!("cache/{}.json", video.id);
+    let cache_record_path = format!("{}/{}.json", cache_dir, video.id);
     let cache_path = std::path::Path::new(&cache_record_path);
     if cache_path.exists()
         && let Ok(cache_content) = std::fs::read_to_string(cache_path)
@@ -532,12 +539,12 @@ async fn run_pipeline(
                 }
             }
 
-    let temp_filename = format!("cache/temp_download.{}", format);
+    let temp_filename = format!("{}/temp_download.{}", cache_dir, format);
     let temp_path = std::path::Path::new(&temp_filename);
 
     // 1. Download audio
     let _ = tx.send(AppEvent::ProcessingLog("[>] Starting download...".to_string())).await;
-    std::fs::create_dir_all("cache")?;
+    std::fs::create_dir_all(&cache_dir)?;
     if temp_path.exists() {
         let _ = std::fs::remove_file(temp_path);
     }
@@ -547,7 +554,7 @@ async fn run_pipeline(
         .arg("--audio-format")
         .arg(&format)
         .arg("-o")
-        .arg("cache/temp_download.%(ext)s")
+        .arg(format!("{}/temp_download.%(ext)s", cache_dir))
         .arg(&video.url)
         .output()
         .await?;
@@ -759,14 +766,22 @@ async fn run_pipeline(
     let dest_dir = format!("{}/{}/{}", base_music_dir, clean_artist, clean_album);
     std::fs::create_dir_all(&dest_dir)?;
 
-    if let Some((ref bytes, ref mime)) = art_data {
-        let ext = mime.ext().unwrap_or("jpg");
-        let cover_path = format!("{}/cover.{}", dest_dir, ext);
-        if let Err(e) = std::fs::write(&cover_path, bytes) {
-            let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Warning: failed to save cover art file: {}", e))).await;
-        } else {
-            let _ = tx.send(AppEvent::ProcessingLog(format!("[>] Saved cover art to: {}", cover_path))).await;
+    let save_cover = env::var("YOUTIDY_SAVE_COVER_FILE")
+        .map(|v| v.parse::<bool>().unwrap_or(true))
+        .unwrap_or(true);
+
+    if save_cover {
+        if let Some((ref bytes, ref mime)) = art_data {
+            let ext = mime.ext().unwrap_or("jpg");
+            let cover_path = format!("{}/cover.{}", dest_dir, ext);
+            if let Err(e) = std::fs::write(&cover_path, bytes) {
+                let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Warning: failed to save cover art file: {}", e))).await;
+            } else {
+                let _ = tx.send(AppEvent::ProcessingLog(format!("[>] Saved cover art to: {}", cover_path))).await;
+            }
         }
+    } else {
+        let _ = tx.send(AppEvent::ProcessingLog("[>] Skipping saving standalone cover art file (embed only).".to_string())).await;
     }
 
     let dest_file = format!("{}/{}.{}", dest_dir, clean_title, format);
@@ -795,7 +810,7 @@ async fn run_pipeline(
         dest_path: dest_file.clone(),
     };
     if let Ok(serialized) = serde_json::to_string(&record) {
-        let cache_record_path = format!("cache/{}.json", video.id);
+        let cache_record_path = format!("{}/{}.json", cache_dir, video.id);
         if let Err(e) = std::fs::write(&cache_record_path, serialized) {
             let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Warning: failed to save cache record: {}", e))).await;
         }

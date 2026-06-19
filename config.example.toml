@@ -5,6 +5,12 @@ directory = "~/Music"
 # Audio format for yt-dlp to extract (e.g. mp3, flac, m4a, opus)
 format = "mp3"
 
+# Whether to save cover art as a standalone file (cover.jpg/cover.png) in the album directory
+save_cover_file = true
+
+# Directory where temporary files and download caches are saved
+cache_directory = "cache"
+
 [api]
 # AcoustID Client ID for audio fingerprinting
 acoustid_client_id = "your_acoustid_client_id_here"
