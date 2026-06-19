@@ -391,8 +391,48 @@ async fn run_python_lyrics_worker(
     title: &str,
     stdin_content: Option<&str>,
 ) -> Option<String> {
-    let mut child = Command::new(".venv/bin/python3")
-        .arg("src/lyrics_worker.py")
+    // 1. Resolve python3 executable
+    let mut python_cmd = "python3".to_string();
+    if std::path::Path::new(".venv/bin/python3").exists() {
+        python_cmd = ".venv/bin/python3".to_string();
+    } else if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(exe_dir) = current_exe.parent() {
+            let venv_py = exe_dir.join(".venv/bin/python3");
+            if venv_py.exists() {
+                python_cmd = venv_py.to_string_lossy().to_string();
+            } else {
+                let parent_venv = exe_dir.parent().map(|p| p.join(".venv/bin/python3"));
+                if let Some(ref p) = parent_venv {
+                    if p.exists() {
+                        python_cmd = p.to_string_lossy().to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Resolve lyrics_worker.py script path
+    let mut script_path = "src/lyrics_worker.py".to_string();
+    if std::path::Path::new("src/lyrics_worker.py").exists() {
+        // use default
+    } else if std::path::Path::new("lyrics_worker.py").exists() {
+        script_path = "lyrics_worker.py".to_string();
+    } else if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(exe_dir) = current_exe.parent() {
+            let exe_script = exe_dir.join("lyrics_worker.py");
+            if exe_script.exists() {
+                script_path = exe_script.to_string_lossy().to_string();
+            } else {
+                let exe_src_script = exe_dir.join("src/lyrics_worker.py");
+                if exe_src_script.exists() {
+                    script_path = exe_src_script.to_string_lossy().to_string();
+                }
+            }
+        }
+    }
+
+    let mut child = Command::new(python_cmd)
+        .arg(script_path)
         .arg(mode)
         .arg(offset.to_string())
         .arg(artist)
