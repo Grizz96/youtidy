@@ -593,7 +593,7 @@ async fn run_pipeline(
     tx: tokio::sync::mpsc::Sender<AppEvent>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let format = env::var("YOUTIDY_FORMAT").unwrap_or_else(|_| "mp3".to_string());
-    let cache_dir = env::var("YOUTIDY_CACHE_DIR").unwrap_or_else(|_| "cache".to_string());
+    let cache_dir = expand_tilde(&env::var("YOUTIDY_CACHE_DIR").unwrap_or_else(|_| "cache".to_string()));
     
     // Check cache first
     let cache_record_path = format!("{}/{}.json", cache_dir, video.id);
@@ -625,7 +625,9 @@ async fn run_pipeline(
     }
 
     let mut cmd = tokio::process::Command::new("yt-dlp");
-    cmd.arg("-x")
+    cmd.arg("-f")
+       .arg("bestaudio/best")
+       .arg("-x")
        .arg("--audio-format")
        .arg(&format);
 
@@ -669,6 +671,8 @@ async fn run_pipeline(
     let _ = tx.send(AppEvent::ProcessingLog("[>] Calculating fingerprint...".to_string())).await;
     let output = tokio::process::Command::new("fpcalc")
         .arg("-json")
+        .arg("-length")
+        .arg("120")
         .arg(&temp_filename)
         .output()
         .await?;
@@ -840,7 +844,7 @@ async fn run_pipeline(
         .replace("{album}", &clean_album)
         .replace("{title}", &clean_title);
 
-    let base_music_dir = env::var("YOUTIDY_MUSIC_DIR").unwrap_or_else(|_| "Music".to_string());
+    let base_music_dir = expand_tilde(&env::var("YOUTIDY_MUSIC_DIR").unwrap_or_else(|_| "Music".to_string()));
     let dest_dir = format!("{}/{}", base_music_dir, folder_relative);
     std::fs::create_dir_all(&dest_dir)?;
 
@@ -1093,14 +1097,11 @@ async fn download_url(
 }
 
 fn format_artist_credit(credits: &[ArtistCredit]) -> String {
-    let mut result = String::new();
-    for credit in credits {
-        result.push_str(&credit.name);
-        if let Some(join) = &credit.joinphrase {
-            result.push_str(join);
-        }
+    if let Some(first_credit) = credits.first() {
+        first_credit.name.trim().to_string()
+    } else {
+        "Unknown Artist".to_string()
     }
-    result.trim().to_string()
 }
 
 fn parse_date_to_sort_key(date_str: &str) -> String {
@@ -1154,3 +1155,17 @@ fn clean_youtube_title(title: &str) -> String {
         clean
     }
 }
+
+fn expand_tilde(path: &str) -> String {
+    if path.starts_with("~/") {
+        if let Ok(home_dir) = env::var("HOME") {
+            return path.replacen('~', &home_dir, 1);
+        }
+    } else if path == "~" {
+        if let Ok(home_dir) = env::var("HOME") {
+            return home_dir;
+        }
+    }
+    path.to_string()
+}
+

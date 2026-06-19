@@ -13,7 +13,7 @@ def search_spotify(query):
         
         # Get artist name(s)
         artists = [a["name"] for a in track.get("artists", [])]
-        artist_name = ", ".join(artists) if artists else "Unknown Artist"
+        artist_name = artists[0] if artists else "Unknown Artist"
         
         album_name = track.get("album", {}).get("name", "Unknown Album")
         track_name = track.get("name", "Unknown Title")
