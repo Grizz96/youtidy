@@ -104,13 +104,68 @@ Configure these sections in your `config.toml`:
 
 ## Usage 🚀
 
-1. Ensure your `.env` file is properly configured.
-2. Run the app using `cargo`:
+### Running the Application
 
-```bash
-cargo run
+#### Option A: Running from Release Binary (Recommended)
+1. Download the latest release tarball for your platform from the [Releases](https://github.com/Grizz96/youtidy/releases) page.
+2. Extract the archive and navigate to the directory:
+   ```bash
+   tar -xzvf youtidy-v0.1.0-linux-x86_64.tar.gz
+   cd youtidy-v0.1.0-linux-x86_64
+   ```
+3. Setup your configuration:
+   - Copy `config.example.toml` to `config.toml` and fill in your AcoustID client API key and other desired settings.
+   - Alternatively, copy `env.example` to `.env` and fill in your credentials.
+4. Run the executable:
+   ```bash
+   ./youtidy
+   ```
 
-```
+#### Option B: Building/Running from Source
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/Grizz96/youtidy.git
+   cd youtidy
+   ```
+2. Setup your configuration files (`config.toml` or `.env`).
+3. Run the application using Cargo:
+   ```bash
+   cargo run --release
+   ```
+
+---
+
+### Step-by-Step Guide
+
+#### 1. Main Menu Mode Selection
+When you launch the app, you will be greeted by the mode selection menu:
+- Use the **Up/Down Arrows** to select between **Search & Download Single Song** or **Download from Playlist**.
+- Press **Enter** to open the selected mode.
+
+#### 2. Search & Download Single Song
+1. Type a query (song name, artist, etc.) directly into the search bar.
+2. Press **Enter** to search. The search results will load asynchronously.
+3. Use the **Up/Down Arrows** (or click with your mouse) to navigate the search results.
+4. Press **Enter** to choose the desired song.
+5. `youtidy` will now automatically download the audio, run AcoustID fingerprinting, query MusicBrainz for metadata/album art, fetch lyrics, and save the organized output file.
+6. Press **Esc** to return to the search screen or **q** to quit.
+
+#### 3. Download from Playlist (YouTube)
+1. Paste or type the YouTube playlist URL into the input field (the URL must contain `list=`).
+2. Press **Enter** to load the tracks.
+3. An interactive list showing all the tracks will appear:
+   - Use **Up/Down Arrows** to navigate the list.
+   - Press **Space** to toggle (select/deselect) the highlighted track.
+   - Press **A** to toggle select all / deselect all tracks in the playlist.
+4. Press **D** or **Enter** to start downloading.
+5. `youtidy` will download and process up to 3 tracks concurrently, displaying real-time download queues with status icons (`⏳ Pending`, `🔄 Processing`, `✅ Success`, `❌ Failed`) on the left panel, and detailed logs on the right.
+6. Press **Esc** to return to the URL input field.
+
+#### 4. Real-time Log Viewer & Scroll
+During downloading and metadata processing, you can monitor output logs:
+- By default, logs auto-scroll to the bottom.
+- To scroll manually, use **Up/Down Arrows** to navigate line-by-line, or **PageUp/PageDown** to scroll by 10 lines.
+- Scroll back to the bottom to resume auto-scroll.
 
 ### Keybindings:
 
