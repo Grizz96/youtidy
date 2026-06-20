@@ -26,9 +26,56 @@ mod lyrics;
 
 #[derive(Debug, PartialEq, Clone)]
 enum AppState {
+    MainMenu,
     Searching,
     Selecting,
     Processing,
+    PlaylistInput,
+    PlaylistConfirm,
+    PlaylistProcessing,
+}
+
+struct ApiLimiter {
+    last_call: tokio::sync::Mutex<std::time::Instant>,
+}
+
+impl ApiLimiter {
+    fn new() -> Self {
+        Self {
+            last_call: tokio::sync::Mutex::new(
+                std::time::Instant::now() - std::time::Duration::from_secs(2)
+            ),
+        }
+    }
+
+    async fn acquire(&self) {
+        let mut last = self.last_call.lock().await;
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(*last);
+        let min_duration = std::time::Duration::from_millis(1000);
+        if elapsed < min_duration {
+            let wait_time = min_duration - elapsed;
+            tokio::time::sleep(wait_time).await;
+        }
+        *last = std::time::Instant::now();
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum PlaylistTrackStatus {
+    Pending,
+    Processing,
+    Success(String),
+    Failed(String),
+}
+
+#[derive(Debug, Clone)]
+struct PlaylistTrack {
+    title: String,
+    artist: String,
+    url: Option<String>,
+    id: String,
+    status: PlaylistTrackStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -47,12 +94,24 @@ struct App {
     selected_video: Option<SearchResult>,
     logs: Vec<String>,
     is_searching: bool,
+    
+    // Playlist fields
+    menu_index: usize,
+    playlist_input: String,
+    playlist_tracks: Vec<PlaylistTrack>,
+    playlist_list_state: ListState,
+    playlist_selected_indices: std::collections::HashSet<usize>,
+    current_playlist_track_index: usize,
+    playlist_is_loading: bool,
+    playlist_error: Option<String>,
+    log_scroll_y: u16,
+    log_manual_scroll: bool,
 }
 
 impl App {
     fn new() -> Self {
         Self {
-            state: AppState::Searching,
+            state: AppState::MainMenu,
             search_input: String::new(),
             search_results: Vec::new(),
             list_state: ListState::default(),
@@ -60,6 +119,17 @@ impl App {
             selected_video: None,
             logs: Vec::new(),
             is_searching: false,
+            
+            menu_index: 0,
+            playlist_input: String::new(),
+            playlist_tracks: Vec::new(),
+            playlist_list_state: ListState::default(),
+            playlist_selected_indices: std::collections::HashSet::new(),
+            current_playlist_track_index: 0,
+            playlist_is_loading: false,
+            playlist_error: None,
+            log_scroll_y: 0,
+            log_manual_scroll: false,
         }
     }
 
@@ -97,9 +167,51 @@ impl App {
         self.list_state.select(Some(i));
     }
 
+    fn playlist_next(&mut self) {
+        if self.playlist_tracks.is_empty() {
+            return;
+        }
+        let i = match self.playlist_list_state.selected() {
+            Some(i) => {
+                if i >= self.playlist_tracks.len().saturating_sub(1) {
+                    0
+                } else {
+                    i + 1
+                }
+            }
+            None => 0,
+        };
+        self.playlist_list_state.select(Some(i));
+    }
+
+    fn playlist_previous(&mut self) {
+        if self.playlist_tracks.is_empty() {
+            return;
+        }
+        let i = match self.playlist_list_state.selected() {
+            Some(i) => {
+                if i == 0 {
+                    self.playlist_tracks.len().saturating_sub(1)
+                } else {
+                    i - 1
+                }
+            }
+            None => 0,
+        };
+        self.playlist_list_state.select(Some(i));
+    }
+
+    fn toggle_track_selection(&mut self) {
+        if let Some(i) = self.playlist_list_state.selected() {
+            if self.playlist_selected_indices.contains(&i) {
+                self.playlist_selected_indices.remove(&i);
+            } else {
+                self.playlist_selected_indices.insert(i);
+            }
+        }
+    }
+
     fn on_click(&mut self, row: u16) -> Option<SearchResult> {
-        // results_area.y is the start of the block border.
-        // Row 0 of items is actually at results_area.y + 1 (inside borders).
         if row > self.results_area.y && row < self.results_area.y + self.results_area.height - 1 {
             let index = (row - self.results_area.y - 1) as usize;
             if index < self.search_results.len() {
@@ -118,8 +230,16 @@ enum AppEvent {
     SearchSuccess(Vec<SearchResult>),
     SearchError(String),
     ProcessingLog(String),
-    ProcessingFinished(Result<String, String>),
+    ProcessingFinished(Result<(String, std::time::Duration), String>),
+    
+    // Playlist events
+    PlaylistLoadStart,
+    PlaylistLoadSuccess(Vec<PlaylistTrack>),
+    PlaylistLoadError(String),
+    PlaylistTrackUpdate(usize, PlaylistTrackStatus),
+    PlaylistFinished(std::time::Duration),
 }
+
 
 #[derive(Debug, Deserialize)]
 struct YtdlSearchResponse {
@@ -401,24 +521,82 @@ where
                             match key.code {
                                 KeyCode::Char('q') => return Ok(()),
                                 KeyCode::Esc => {
-                                    if app.state == AppState::Processing {
-                                        app.state = AppState::Searching;
-                                        app.logs.clear();
+                                    match app.state {
+                                        AppState::MainMenu => return Ok(()),
+                                        AppState::Searching | AppState::PlaylistInput => {
+                                            app.state = AppState::MainMenu;
+                                        }
+                                        AppState::Selecting => {
+                                            app.state = AppState::Searching;
+                                        }
+                                        AppState::Processing => {
+                                            app.state = AppState::Searching;
+                                            app.logs.clear();
+                                            app.log_scroll_y = 0;
+                                            app.log_manual_scroll = false;
+                                        }
+                                        AppState::PlaylistConfirm => {
+                                            app.state = AppState::PlaylistInput;
+                                        }
+                                        AppState::PlaylistProcessing => {
+                                            app.state = AppState::PlaylistConfirm;
+                                            app.log_scroll_y = 0;
+                                            app.log_manual_scroll = false;
+                                        }
                                     }
                                 }
                                 KeyCode::Char(c) => {
-                                    if app.state != AppState::Processing && !app.is_searching {
-                                        app.search_input.push(c);
-                                        app.state = AppState::Searching;
+                                    match app.state {
+                                        AppState::Searching => {
+                                            if !app.is_searching {
+                                                app.search_input.push(c);
+                                            }
+                                        }
+                                        AppState::PlaylistInput => {
+                                            if !app.playlist_is_loading {
+                                                app.playlist_input.push(c);
+                                            }
+                                        }
+                                        AppState::PlaylistConfirm => {
+                                            if c == ' ' {
+                                                app.toggle_track_selection();
+                                            } else if c == 'a' || c == 'A' {
+                                                if app.playlist_selected_indices.len() == app.playlist_tracks.len() {
+                                                    app.playlist_selected_indices.clear();
+                                                } else {
+                                                    app.playlist_selected_indices = (0..app.playlist_tracks.len()).collect();
+                                                }
+                                            } else if c == 'd' || c == 'D' {
+                                                start_playlist_processing(app, event_tx.clone()).await;
+                                            }
+                                        }
+                                        _ => {}
                                     }
                                 }
                                 KeyCode::Backspace => {
-                                    if app.state != AppState::Processing && !app.is_searching {
-                                        app.search_input.pop();
+                                    match app.state {
+                                        AppState::Searching => {
+                                            if !app.is_searching {
+                                                app.search_input.pop();
+                                            }
+                                        }
+                                        AppState::PlaylistInput => {
+                                            if !app.playlist_is_loading {
+                                                app.playlist_input.pop();
+                                            }
+                                        }
+                                        _ => {}
                                     }
                                 }
                                 KeyCode::Enter => {
                                     match app.state {
+                                        AppState::MainMenu => {
+                                            if app.menu_index == 0 {
+                                                app.state = AppState::Searching;
+                                            } else {
+                                                app.state = AppState::PlaylistInput;
+                                            }
+                                        }
                                         AppState::Searching => {
                                             if !app.is_searching && !app.search_input.trim().is_empty() {
                                                 let query = app.search_input.clone();
@@ -443,12 +621,14 @@ where
                                                 app.state = AppState::Processing;
                                                 app.logs.clear();
                                                 app.logs.push(format!("[>] Initialized pipeline for: {}", selected.title));
-
+ 
                                                 let tx = event_tx.clone();
                                                 tokio::spawn(async move {
-                                                    match run_pipeline(selected, tx.clone()).await {
+                                                    let start_time = std::time::Instant::now();
+                                                    match run_pipeline(selected, tx.clone(), None).await {
                                                         Ok(dest_path) => {
-                                                            let _ = tx.send(AppEvent::ProcessingFinished(Ok(dest_path))).await;
+                                                            let elapsed = start_time.elapsed();
+                                                            let _ = tx.send(AppEvent::ProcessingFinished(Ok((dest_path, elapsed)))).await;
                                                         }
                                                         Err(e) => {
                                                             let _ = tx.send(AppEvent::ProcessingFinished(Err(e.to_string()))).await;
@@ -457,18 +637,93 @@ where
                                                 });
                                             }
                                         }
-                                        AppState::Processing => {}
+                                        AppState::PlaylistInput => {
+                                            if !app.playlist_is_loading && !app.playlist_input.trim().is_empty() {
+                                                let url = app.playlist_input.clone();
+                                                let tx = event_tx.clone();
+                                                
+                                                if !url.contains("youtube.com") && !url.contains("youtu.be") && !url.contains("list=") {
+                                                    tokio::spawn(async move {
+                                                        let _ = tx.send(AppEvent::PlaylistLoadStart).await;
+                                                        let _ = tx.send(AppEvent::PlaylistLoadError("Only YouTube playlist links are supported. Please paste a YouTube playlist URL (containing list=).".to_string())).await;
+                                                    });
+                                                } else {
+                                                    tokio::spawn(async move {
+                                                        let _ = tx.send(AppEvent::PlaylistLoadStart).await;
+                                                        match get_youtube_playlist_tracks(&url).await {
+                                                            Ok(tracks) => {
+                                                                let _ = tx.send(AppEvent::PlaylistLoadSuccess(tracks)).await;
+                                                            }
+                                                            Err(e) => {
+                                                                let _ = tx.send(AppEvent::PlaylistLoadError(e.to_string())).await;
+                                                            }
+                                                        }
+                                                    });
+                                                }
+                                            }
+                                        }
+                                        AppState::PlaylistConfirm => {
+                                            start_playlist_processing(app, event_tx.clone()).await;
+                                        }
+                                        _ => {}
                                     }
                                 }
                                 KeyCode::Down => {
-                                    if app.state == AppState::Selecting && !app.is_searching {
-                                        app.next();
+                                    match app.state {
+                                        AppState::MainMenu => {
+                                            if app.menu_index < 1 {
+                                                app.menu_index += 1;
+                                            } else {
+                                                app.menu_index = 0;
+                                            }
+                                        }
+                                        AppState::Selecting if !app.is_searching => {
+                                            app.next();
+                                        }
+                                        AppState::PlaylistConfirm => {
+                                            app.playlist_next();
+                                        }
+                                        AppState::Processing | AppState::PlaylistProcessing => {
+                                            app.log_scroll_y = app.log_scroll_y.saturating_add(1);
+                                            app.log_manual_scroll = true;
+                                        }
+                                        _ => {}
                                     }
                                 }
-                                KeyCode::Up
-                                    if app.state == AppState::Selecting && !app.is_searching => {
-                                        app.previous();
+                                KeyCode::Up => {
+                                    match app.state {
+                                        AppState::MainMenu => {
+                                            if app.menu_index > 0 {
+                                                app.menu_index -= 1;
+                                            } else {
+                                                app.menu_index = 1;
+                                            }
+                                        }
+                                        AppState::Selecting if !app.is_searching => {
+                                            app.previous();
+                                        }
+                                        AppState::PlaylistConfirm => {
+                                            app.playlist_previous();
+                                        }
+                                        AppState::Processing | AppState::PlaylistProcessing => {
+                                            app.log_scroll_y = app.log_scroll_y.saturating_sub(1);
+                                            app.log_manual_scroll = true;
+                                        }
+                                        _ => {}
                                     }
+                                }
+                                KeyCode::PageUp => {
+                                    if app.state == AppState::Processing || app.state == AppState::PlaylistProcessing {
+                                        app.log_scroll_y = app.log_scroll_y.saturating_sub(10);
+                                        app.log_manual_scroll = true;
+                                    }
+                                }
+                                KeyCode::PageDown => {
+                                    if app.state == AppState::Processing || app.state == AppState::PlaylistProcessing {
+                                        app.log_scroll_y = app.log_scroll_y.saturating_add(10);
+                                        app.log_manual_scroll = true;
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -481,12 +736,14 @@ where
                                     app.state = AppState::Processing;
                                     app.logs.clear();
                                     app.logs.push(format!("[>] Initialized pipeline for: {}", selected.title));
-
+ 
                                     let tx = event_tx.clone();
                                     tokio::spawn(async move {
-                                        match run_pipeline(selected, tx.clone()).await {
+                                        let start_time = std::time::Instant::now();
+                                        match run_pipeline(selected, tx.clone(), None).await {
                                             Ok(dest_path) => {
-                                                let _ = tx.send(AppEvent::ProcessingFinished(Ok(dest_path))).await;
+                                                let elapsed = start_time.elapsed();
+                                                let _ = tx.send(AppEvent::ProcessingFinished(Ok((dest_path, elapsed)))).await;
                                             }
                                             Err(e) => {
                                                 let _ = tx.send(AppEvent::ProcessingFinished(Err(e.to_string()))).await;
@@ -522,8 +779,9 @@ where
             }
             AppEvent::ProcessingFinished(res) => {
                 match res {
-                    Ok(dest_path) => {
-                        app.logs.push("[+] Processing completed successfully!".to_string());
+                    Ok((dest_path, elapsed)) => {
+                        let formatted_time = format_duration(elapsed);
+                        app.logs.push(format!("[+] Processing completed successfully in {}!", formatted_time));
                         app.logs.push(format!("[+] Saved path: {}", dest_path));
                     }
                     Err(err) => {
@@ -531,11 +789,131 @@ where
                     }
                 }
             }
+            AppEvent::PlaylistLoadStart => {
+                app.playlist_is_loading = true;
+                app.playlist_tracks.clear();
+                app.playlist_selected_indices.clear();
+                app.playlist_list_state.select(None);
+                app.playlist_error = None;
+            }
+            AppEvent::PlaylistLoadSuccess(tracks) => {
+                app.playlist_is_loading = false;
+                app.playlist_tracks = tracks;
+                app.playlist_selected_indices = (0..app.playlist_tracks.len()).collect();
+                if !app.playlist_tracks.is_empty() {
+                    app.state = AppState::PlaylistConfirm;
+                    app.playlist_list_state.select(Some(0));
+                } else {
+                    app.state = AppState::PlaylistInput;
+                }
+            }
+            AppEvent::PlaylistLoadError(err) => {
+                app.playlist_is_loading = false;
+                app.playlist_error = Some(err);
+            }
+            AppEvent::PlaylistTrackUpdate(idx, status) => {
+                if idx < app.playlist_tracks.len() {
+                    app.playlist_tracks[idx].status = status;
+                }
+                app.current_playlist_track_index = idx;
+            }
+            AppEvent::PlaylistFinished(elapsed) => {
+                let formatted_time = format_duration(elapsed);
+                app.logs.push(format!("[+] Playlist processing finished in {}!", formatted_time));
+            }
         }
         terminal.draw(|f| ui::draw(f, app))?;
     }
 
     Ok(())
+}
+
+async fn start_playlist_processing(app: &mut App, tx: tokio::sync::mpsc::Sender<AppEvent>) {
+    if app.playlist_selected_indices.is_empty() {
+        return;
+    }
+    app.state = AppState::PlaylistProcessing;
+    app.current_playlist_track_index = 0;
+    app.logs.clear();
+    app.logs.push("[>] Initialized playlist pipeline...".to_string());
+    
+    // Reset statuses of selected tracks
+    for i in 0..app.playlist_tracks.len() {
+        if app.playlist_selected_indices.contains(&i) {
+            app.playlist_tracks[i].status = PlaylistTrackStatus::Pending;
+        }
+    }
+    
+    let tracks = app.playlist_tracks.clone();
+    let selected_indices = app.playlist_selected_indices.clone();
+    
+    // Initialize Semaphore and ApiLimiter
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(3)); // max 3 concurrent downloads
+    let api_limiter = std::sync::Arc::new(ApiLimiter::new());
+    
+    let playlist_start_time = std::time::Instant::now();
+
+    tokio::spawn(async move {
+        let mut tasks = Vec::new();
+        
+        for i in 0..tracks.len() {
+            if !selected_indices.contains(&i) {
+                continue;
+            }
+            
+            let track = tracks[i].clone();
+            let tx_clone = tx.clone();
+            let sem_clone = semaphore.clone();
+            let limiter_clone = api_limiter.clone();
+            
+            let task = tokio::spawn(async move {
+                // Acquire permit before starting processing
+                let permit = sem_clone.acquire_owned().await.unwrap();
+                
+                let _ = tx_clone.send(AppEvent::PlaylistTrackUpdate(i, PlaylistTrackStatus::Processing)).await;
+                let _ = tx_clone.send(AppEvent::ProcessingLog(format!("[>] Starting track: {}", track.title))).await;
+                
+                let search_result = SearchResult {
+                    title: track.title.clone(),
+                    url: track.url.clone().unwrap_or_default(),
+                    id: track.id.clone(),
+                };
+                
+                let track_start_time = std::time::Instant::now();
+                // Run the actual pipeline (passing the limiter for rate limiting)
+                let res = run_pipeline(search_result, tx_clone.clone(), Some(limiter_clone)).await;
+                let track_elapsed = track_start_time.elapsed();
+                
+                // Explicitly drop permit here to allow next task in line to start downloading
+                drop(permit);
+                
+                match res {
+                    Ok(dest_path) => {
+                        let _ = tx_clone.send(AppEvent::PlaylistTrackUpdate(i, PlaylistTrackStatus::Success(dest_path))).await;
+                        let formatted_time = format_duration(track_elapsed);
+                        let _ = tx_clone.send(AppEvent::ProcessingLog(format!("[+] Track finished in {}: {}", formatted_time, track.title))).await;
+                    }
+                    Err(e) => {
+                        let _ = tx_clone.send(AppEvent::PlaylistTrackUpdate(i, PlaylistTrackStatus::Failed(e.to_string()))).await;
+                        let _ = tx_clone.send(AppEvent::ProcessingLog(format!("[!] Track failed: {}", track.title))).await;
+                    }
+                }
+            });
+            
+            tasks.push(task);
+            // Small pause between spawning to prevent instant bursts
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+        
+        // Wait for all spawned tasks to finish
+        for task in tasks {
+            let _ = task.await;
+        }
+        
+        let total_elapsed = playlist_start_time.elapsed();
+        let _ = tx.send(AppEvent::PlaylistFinished(total_elapsed)).await;
+    });
+
 }
 
 async fn search_youtube(query: &str) -> Result<Vec<SearchResult>, Box<dyn Error + Send + Sync>> {
@@ -583,6 +961,59 @@ async fn search_youtube(query: &str) -> Result<Vec<SearchResult>, Box<dyn Error 
     Ok(results)
 }
 
+async fn get_youtube_playlist_tracks(url: &str) -> Result<Vec<PlaylistTrack>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut cmd = tokio::process::Command::new("yt-dlp");
+    cmd.arg("--flat-playlist")
+       .arg("-J");
+       
+    // Apply proxy/ua if set in env
+    if let Ok(proxy) = env::var("YOUTIDY_PROXY")
+        && !proxy.trim().is_empty() {
+            cmd.arg("--proxy").arg(&proxy);
+        }
+    if let Ok(ua) = env::var("YOUTIDY_USER_AGENT")
+        && !ua.trim().is_empty() {
+            cmd.arg("--user-agent").arg(&ua);
+        }
+        
+    cmd.arg(url);
+    
+    let output = cmd.output().await?;
+    if !output.status.success() {
+        let err_str = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("yt-dlp failed to load playlist: {}", err_str).into());
+    }
+    
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    
+    let entries = response.get("entries")
+        .and_then(|v| v.as_array())
+        .ok_or("No entries found in playlist")?;
+        
+    let mut tracks = Vec::new();
+    for entry in entries {
+        let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if id.is_empty() {
+            continue;
+        }
+        let title = entry.get("title").and_then(|v| v.as_str()).unwrap_or("Unknown Title").to_string();
+        let uploader = entry.get("uploader").and_then(|v| v.as_str()).unwrap_or("Unknown Artist").to_string();
+        
+        let video_url = format!("https://www.youtube.com/watch?v={}", id);
+        
+        tracks.push(PlaylistTrack {
+            title,
+            artist: uploader,
+            url: Some(video_url),
+            id,
+            status: PlaylistTrackStatus::Pending,
+        });
+    }
+    
+    Ok(tracks)
+}
+
+
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct CacheRecord {
     dest_path: String,
@@ -591,6 +1022,7 @@ struct CacheRecord {
 async fn run_pipeline(
     video: SearchResult,
     tx: tokio::sync::mpsc::Sender<AppEvent>,
+    api_limiter: Option<std::sync::Arc<ApiLimiter>>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let format = env::var("YOUTIDY_FORMAT").unwrap_or_else(|_| "mp3".to_string());
     let cache_dir = expand_tilde(&env::var("YOUTIDY_CACHE_DIR").unwrap_or_else(|_| "cache".to_string()));
@@ -603,7 +1035,7 @@ async fn run_pipeline(
             && let Ok(record) = serde_json::from_str::<CacheRecord>(&cache_content) {
                 let dest_path = std::path::Path::new(&record.dest_path);
                 let lrc_path = dest_path.with_extension("lrc");
-                if dest_path.exists() && lrc_path.exists() {
+                if dest_path.exists() && lrc_path.exists() && dest_path.extension().and_then(|e| e.to_str()) == Some(&format) {
                     let _ = tx.send(AppEvent::ProcessingLog(format!(
                         "[>] Cache hit: song and lyrics already downloaded. Found at: {}",
                         record.dest_path
@@ -614,36 +1046,36 @@ async fn run_pipeline(
                 }
             }
 
-    let temp_filename = format!("{}/temp_download.{}", cache_dir, format);
+    let temp_filename = format!("{}/temp_download_{}.{}", cache_dir, video.id, format);
     let temp_path = std::path::Path::new(&temp_filename);
 
     // 1. Download audio
     let _ = tx.send(AppEvent::ProcessingLog("[>] Starting download...".to_string())).await;
     std::fs::create_dir_all(&cache_dir)?;
-    if temp_path.exists() {
-        let _ = std::fs::remove_file(temp_path);
+    
+    // Clean up any old temporary files for this video ID
+    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                    if file_name.starts_with(&format!("temp_download_{}", video.id)) {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+            }
+        }
     }
 
-    let mut cmd = tokio::process::Command::new("yt-dlp");
-    cmd.arg("-f")
-       .arg("bestaudio/best")
-       .arg("-x")
-       .arg("--audio-format")
-       .arg(&format);
+    // Prioritize downloading a native stream matching the requested target format
+    let preferred_format = match format.as_str() {
+        "m4a" => "bestaudio[ext=m4a]/bestaudio/best",
+        "opus" => "bestaudio[acodec=opus]/bestaudio[ext=webm]/bestaudio/best",
+        _ => "bestaudio/best",
+    };
 
-    // Apply bitrate/quality
-    if let Ok(bitrate) = env::var("YOUTIDY_BITRATE")
-        && !bitrate.trim().is_empty() {
-            let cleaned = bitrate.trim().to_uppercase();
-            if cleaned.chars().all(|c| c.is_ascii_digit()) {
-                cmd.arg("--audio-quality").arg(format!("{}K", cleaned));
-            } else {
-                cmd.arg("--audio-quality").arg(&bitrate);
-            }
-        } else if let Ok(quality) = env::var("YOUTIDY_AUDIO_QUALITY")
-            && !quality.trim().is_empty() {
-                cmd.arg("--audio-quality").arg(&quality);
-            }
+    let mut cmd = tokio::process::Command::new("yt-dlp");
+    cmd.arg("-f").arg(preferred_format);
 
     // Network options
     if let Ok(proxy) = env::var("YOUTIDY_PROXY")
@@ -656,7 +1088,7 @@ async fn run_pipeline(
         }
 
     cmd.arg("-o")
-       .arg(format!("{}/temp_download.%(ext)s", cache_dir))
+       .arg(format!("{}/temp_download_{}.%(ext)s", cache_dir, video.id))
        .arg(&video.url);
 
     let output = cmd.output().await?;
@@ -666,6 +1098,109 @@ async fn run_pipeline(
         return Err(format!("yt-dlp download failed: {}", err_str).into());
     }
     let _ = tx.send(AppEvent::ProcessingLog("[>] Download complete.".to_string())).await;
+
+    // Locate the downloaded file
+    let mut downloaded_path = None;
+    let expected_prefix = format!("temp_download_{}", video.id);
+    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(file_stem) = path.file_stem() {
+                    if file_stem == expected_prefix.as_str() {
+                        downloaded_path = Some(path.clone());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let downloaded_path = match downloaded_path {
+        Some(path) => path,
+        None => return Err("Downloaded temporary file not found".into()),
+    };
+
+    let downloaded_ext = downloaded_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let _ = tx.send(AppEvent::ProcessingLog(format!("[>] Downloaded format: {}", downloaded_ext))).await;
+
+    let skip_transcode = (format == "m4a" && downloaded_ext == "m4a") || (format == "opus" && downloaded_ext == "opus");
+    let stream_copy_opus = format == "opus" && downloaded_ext == "webm";
+
+    if skip_transcode {
+        let _ = tx.send(AppEvent::ProcessingLog("[>] Formats match. Skipping transcoding (instant copy).".to_string())).await;
+        std::fs::rename(&downloaded_path, &temp_path)?;
+    } else if stream_copy_opus {
+        let _ = tx.send(AppEvent::ProcessingLog("[>] Extracting Opus audio without transcoding (instant copy).".to_string())).await;
+        let mut ffmpeg = tokio::process::Command::new("ffmpeg");
+        ffmpeg.arg("-y")
+              .arg("-i").arg(&downloaded_path)
+              .arg("-vn")
+              .arg("-c:a").arg("copy")
+              .arg(&temp_filename);
+        let out = ffmpeg.output().await?;
+        if !out.status.success() {
+            let err_str = String::from_utf8_lossy(&out.stderr);
+            return Err(format!("ffmpeg stream copy failed: {}", err_str).into());
+        }
+        let _ = std::fs::remove_file(&downloaded_path);
+    } else {
+        let _ = tx.send(AppEvent::ProcessingLog(format!("[>] Transcoding audio to {}...", format))).await;
+        let mut ffmpeg = tokio::process::Command::new("ffmpeg");
+        ffmpeg.arg("-y")
+              .arg("-i").arg(&downloaded_path)
+              .arg("-vn");
+
+        match format.as_str() {
+            "mp3" => {
+                ffmpeg.arg("-c:a").arg("libmp3lame");
+                if let Ok(bitrate) = env::var("YOUTIDY_BITRATE")
+                    && !bitrate.trim().is_empty() {
+                        let cleaned = bitrate.trim().to_uppercase();
+                        if cleaned.chars().all(|c| c.is_ascii_digit()) {
+                            ffmpeg.arg("-b:a").arg(format!("{}K", cleaned));
+                        } else {
+                            ffmpeg.arg("-b:a").arg(&bitrate);
+                        }
+                    } else if let Ok(quality) = env::var("YOUTIDY_AUDIO_QUALITY")
+                        && !quality.trim().is_empty() {
+                            ffmpeg.arg("-q:a").arg(&quality);
+                        } else {
+                            ffmpeg.arg("-q:a").arg("2");
+                        }
+            }
+            "m4a" => {
+                ffmpeg.arg("-c:a").arg("aac");
+                if let Ok(bitrate) = env::var("YOUTIDY_BITRATE")
+                    && !bitrate.trim().is_empty() {
+                        ffmpeg.arg("-b:a").arg(&bitrate);
+                    } else {
+                        ffmpeg.arg("-b:a").arg("192k");
+                    }
+            }
+            "opus" => {
+                ffmpeg.arg("-c:a").arg("libopus");
+                if let Ok(bitrate) = env::var("YOUTIDY_BITRATE")
+                    && !bitrate.trim().is_empty() {
+                        ffmpeg.arg("-b:a").arg(&bitrate);
+                    } else {
+                        ffmpeg.arg("-b:a").arg("160k");
+                    }
+            }
+            "flac" => {
+                ffmpeg.arg("-c:a").arg("flac");
+            }
+            _ => {}
+        }
+        ffmpeg.arg(&temp_filename);
+        let out = ffmpeg.output().await?;
+        if !out.status.success() {
+            let err_str = String::from_utf8_lossy(&out.stderr);
+            return Err(format!("ffmpeg transcoding failed: {}", err_str).into());
+        }
+        let _ = std::fs::remove_file(&downloaded_path);
+    }
+    let _ = tx.send(AppEvent::ProcessingLog("[>] Post-processing complete.".to_string())).await;
 
     // 2. fpcalc Fingerprint
     let _ = tx.send(AppEvent::ProcessingLog("[>] Calculating fingerprint...".to_string())).await;
@@ -691,6 +1226,10 @@ async fn run_pipeline(
     ))).await;
 
     // 3. AcoustID Lookup
+    if let Some(limiter) = &api_limiter {
+        let _ = tx.send(AppEvent::ProcessingLog("[>] Waiting for API rate limit slot...".to_string())).await;
+        limiter.acquire().await;
+    }
     let _ = tx.send(AppEvent::ProcessingLog("[>] Querying AcoustID API...".to_string())).await;
     let client_id = env::var("ACOUSTID_CLIENT_ID")
         .map_err(|_| "ACOUSTID_CLIENT_ID environment variable not set")?;
@@ -1167,5 +1706,16 @@ fn expand_tilde(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+fn format_duration(d: std::time::Duration) -> String {
+    let total_secs = d.as_secs();
+    let mins = total_secs / 60;
+    let secs = total_secs % 60;
+    if mins > 0 {
+        format!("{}m {}s", mins, secs)
+    } else {
+        format!("{}s", secs)
+    }
 }
 

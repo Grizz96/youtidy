@@ -5,6 +5,8 @@
 ## Features ✨
 
 - 🔍 **Built-in YouTube Search**: Search for tracks directly from the terminal.
+- 📋 **Batch Playlist Download**: Batch downloads entire YouTube playlists with interactive selection, concurrent downloading (up to 3 tracks simultaneously), and built-in API rate-limiting to avoid restrictions.
+- ⚡ **Zero-Transcoding & Stream Copy**: Skips transcoding entirely when the downloaded format matches your target format (`m4a` or `opus`), or performs instant stream extraction (`webm` to `opus` copy) to save CPU and complete downloads instantly.
 - 🚀 **Asynchronous Downloading**: Downloads audio via `yt-dlp` without blocking the TUI.
 - 🧠 **Auto Track Identification**:
   - Uses `fpcalc` to generate acoustic fingerprints.
@@ -19,7 +21,7 @@
   - Embeds the album art directly into the MP3 ID3v2 metadata.
 - 🏷️ **Auto Tagging**: Writes ID3v2 tags (Title, Artist, Album) using the `lofty` crate.
 - 📁 **Folder Organization**: Neatly saves downloaded files following a `Music/<Artist>/<Album>/<Title>.mp3` directory structure.
-- 💾 **Local Cache**: Caches download records at `cache/{video_id}.json`. Re-downloading the same video will be skipped if both the audio and `.lrc` files still exist.
+- 💾 **Local Cache**: Caches download records at `cache/{video_id}.json`. Re-downloading the same video will be skipped if both the audio and target format extension match, and `.lrc` files still exist.
 - 🎶 **Lyrics Romanization & Alignment**: Detects Japanese text in synced lyrics (LRCLIB), matches them against Genius lyrics using Romaji normalization, and shifts timestamps based on duration offsets.
 
 ## Prerequisites 🛠️
@@ -112,11 +114,29 @@ cargo run
 
 ### Keybindings:
 
-* **Type anything**: Enter keywords in the search bar.
-* **Enter**: Trigger a search, or select a search result to start processing.
-* **Up / Down Arrow / Mouse Click**: Navigate through the YouTube search results.
-* **Esc**: Return to the search view from the processing logs.
+#### General
 * **q**: Quit the application.
+* **Esc**: Go back to the previous screen (e.g., from search/logs/inputs back to menus).
+* **Up / Down Arrow**: Navigate menus, search results, or playlist items.
+
+#### Main Menu
+* **Enter**: Confirm and select the highlighted mode.
+
+#### Single Search Mode
+* **Type text**: Enter keywords in the search bar.
+* **Enter**: Trigger search or start processing the selected search result.
+* **Mouse Click**: Navigate and select search results.
+
+#### Playlist Mode
+* **Type text**: Paste a YouTube playlist URL.
+* **Enter**: Load the playlist.
+* **Space**: Toggle selection of the highlighted track.
+* **A**: Select or deselect all tracks in the playlist.
+* **D / Enter**: Start batch downloading the selected tracks.
+
+#### Log / Processing Viewer
+* **Up / Down Arrow**: Scroll through logs line-by-line.
+* **PageUp / PageDown**: Scroll through logs by page (10 lines).
 
 ## License 📄
 
