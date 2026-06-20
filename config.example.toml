@@ -8,8 +8,12 @@ format = "mp3"
 # Whether to save cover art as a standalone file (cover.jpg/cover.png) in the album directory
 save_cover_file = true
 
-# Directory where temporary files and download caches are saved
-cache_directory = "cache"
+# Optional: Directory where temporary files and download caches are saved
+# Defaults to platform-specific standard directories:
+# - Linux: ~/.cache/youtidy/
+# - macOS: ~/Library/Caches/youtidy/
+# - Windows: %LOCALAPPDATA%/youtidy/cache/
+# cache_directory = "cache"
 
 # Optional: Audio quality to pass to yt-dlp/ffmpeg (0-9 for VBR, where 0 is best, default: 5)
 # audio_quality = 5

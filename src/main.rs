@@ -1025,7 +1025,7 @@ async fn run_pipeline(
     api_limiter: Option<std::sync::Arc<ApiLimiter>>,
 ) -> Result<String, Box<dyn Error + Send + Sync>> {
     let format = env::var("YOUTIDY_FORMAT").unwrap_or_else(|_| "mp3".to_string());
-    let cache_dir = expand_tilde(&env::var("YOUTIDY_CACHE_DIR").unwrap_or_else(|_| "cache".to_string()));
+    let cache_dir = expand_tilde(&env::var("YOUTIDY_CACHE_DIR").unwrap_or_else(|_| get_default_cache_dir()));
     
     // Check cache first
     let cache_record_path = format!("{}/{}.json", cache_dir, video.id);
@@ -1717,5 +1717,54 @@ fn format_duration(d: std::time::Duration) -> String {
     } else {
         format!("{}s", secs)
     }
+}
+
+fn get_default_cache_dir() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local_appdata) = env::var("LOCALAPPDATA") {
+            let mut path = std::path::PathBuf::from(local_appdata);
+            path.push("youtidy");
+            path.push("cache");
+            if let Some(s) = path.to_str() {
+                return s.to_string();
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = env::var("HOME") {
+            let mut path = std::path::PathBuf::from(home);
+            path.push("Library");
+            path.push("Caches");
+            path.push("youtidy");
+            if let Some(s) = path.to_str() {
+                return s.to_string();
+            }
+        }
+    }
+
+    // Default for Linux and Unix-like systems
+    if let Ok(xdg_cache) = env::var("XDG_CACHE_HOME") {
+        if !xdg_cache.trim().is_empty() {
+            let mut path = std::path::PathBuf::from(xdg_cache);
+            path.push("youtidy");
+            if let Some(s) = path.to_str() {
+                return s.to_string();
+            }
+        }
+    }
+
+    if let Ok(home) = env::var("HOME") {
+        let mut path = std::path::PathBuf::from(home);
+        path.push(".cache");
+        path.push("youtidy");
+        if let Some(s) = path.to_str() {
+            return s.to_string();
+        }
+    }
+
+    "cache".to_string()
 }
 
