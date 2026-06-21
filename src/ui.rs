@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Alignment},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap, BorderType},
 };
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -20,21 +20,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 ])
                 .split(f.area());
 
-            let title_p = Paragraph::new("youtidy 🎵")
+            let title_p = Paragraph::new("youtidy 󰝚 ")
                 .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+                .style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD));
             f.render_widget(title_p, layout[1]);
             app.menu_area = layout[2];
 
             let item_search = if app.menu_index == 0 {
-                " > 🔍 Search & Download Single Song < "
+                "󰅂  󰝚  Search & Download Single Song  "
             } else {
-                "   🔍 Search & Download Single Song   "
+                "   󰝚  Search & Download Single Song  "
             };
             let item_playlist = if app.menu_index == 1 {
-                " > 📋 Download from Playlist (YouTube / Spotify) < "
+                "󰅂  󰲸  Download from Playlist (YouTube / Spotify)  "
             } else {
-                "   📋 Download from Playlist (YouTube / Spotify)   "
+                "   󰲸  Download from Playlist (YouTube / Spotify)  "
             };
 
             let menu_lines = vec![
@@ -42,18 +42,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 Line::from(ratatui::text::Span::styled(
                     item_search,
                     if app.menu_index == 0 {
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(Color::White)
+                        Style::default().fg(Color::Cyan)
                     }
                 )),
                 Line::from(""),
                 Line::from(ratatui::text::Span::styled(
                     item_playlist,
                     if app.menu_index == 1 {
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(Color::White)
+                        Style::default().fg(Color::Cyan)
                     }
                 )),
             ];
@@ -63,8 +63,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(" Select Mode ")
-                        .border_style(Style::default().fg(Color::Yellow))
+                        .border_type(BorderType::Rounded)
+                        .title(" 󰲸  Select Mode ")
+                        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                        .border_style(Style::default().fg(Color::Magenta))
                 );
             f.render_widget(menu_block, layout[2]);
 
@@ -83,28 +85,30 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 ])
                 .split(f.area());
 
-            let title_p = Paragraph::new("youtidy 🎵 - Playlist Downloader")
+            let title_p = Paragraph::new("youtidy 󰝚  - Playlist Downloader")
                 .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+                .style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD));
             f.render_widget(title_p, layout[0]);
 
             let input_title = if app.playlist_is_loading {
-                " Fetching Playlist Tracks (Please wait...) "
+                " ⏳ Fetching Playlist Tracks (Please wait...) "
             } else {
-                " Enter YouTube Playlist URL & Press Enter "
+                " 󰲸  Enter YouTube Playlist URL & Press Enter "
             };
 
             let input_block = Paragraph::new(app.playlist_input.as_str()).block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .border_style(if app.playlist_is_loading {
                         Style::default().fg(Color::Yellow)
                     } else if app.playlist_error.is_some() {
                         Style::default().fg(Color::Red)
                     } else {
-                        Style::default().fg(Color::Green)
+                        Style::default().fg(Color::Magenta)
                     })
-                    .title(input_title),
+                    .title(input_title)
+                    .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             );
             f.render_widget(input_block, layout[1]);
 
@@ -147,15 +151,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .enumerate()
                 .map(|(idx, track)| {
                     let is_selected = app.playlist_selected_indices.contains(&idx);
-                    let checkbox = if is_selected { "[X] " } else { "[ ] " };
+                    let checkbox = if is_selected { "󰄲 " } else { "󰄱 " };
                     let style = if is_selected {
                         Style::default().fg(Color::White)
                     } else {
                         Style::default().fg(Color::DarkGray)
                     };
                     ListItem::new(Line::from(vec![
-                        ratatui::text::Span::styled(checkbox, if is_selected { Style::default().fg(Color::Green) } else { Style::default().fg(Color::DarkGray) }),
-                        ratatui::text::Span::styled(format!("{} - {}", track.artist, track.title), style),
+                        ratatui::text::Span::styled(checkbox, if is_selected { Style::default().fg(Color::Magenta) } else { Style::default().fg(Color::DarkGray) }),
+                        ratatui::text::Span::styled(format!(" {} - {}", track.artist, track.title), style),
                     ]))
                 })
                 .collect();
@@ -164,23 +168,27 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Green))
-                        .title(" Playlist Tracks ")
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(Color::Magenta))
+                        .title(" 󰲸  Playlist Tracks ")
+                        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
                 )
                 .highlight_style(
                     Style::default()
-                        .bg(Color::Blue)
-                        .fg(Color::White)
+                        .bg(Color::Magenta)
+                        .fg(Color::Black)
                         .add_modifier(Modifier::BOLD),
                 );
 
             f.render_stateful_widget(list, chunks[0], &mut app.playlist_list_state);
 
             let scrollbar = ratatui::widgets::Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
-                .begin_symbol(Some("▲"))
-                .end_symbol(Some("▼"))
-                .track_symbol(Some("│"))
-                .thumb_symbol("┃");
+                .begin_symbol(Some("󰄿"))
+                .end_symbol(Some("󰄼"))
+                .track_symbol(Some("┋"))
+                .thumb_symbol("█")
+                .track_style(Style::default().fg(Color::Magenta))
+                .thumb_style(Style::default().fg(Color::Magenta));
             let mut scrollbar_state = ratatui::widgets::ScrollbarState::new(app.playlist_tracks.len())
                 .position(app.playlist_list_state.selected().unwrap_or(0));
             f.render_stateful_widget(
@@ -195,27 +203,44 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             let info_lines = vec![
                 Line::from(""),
                 Line::from(vec![
-                    ratatui::text::Span::styled(" Playlist Loaded!", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                    ratatui::text::Span::styled(" 󰄴  Playlist Loaded!", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
                 ]),
                 Line::from(""),
-                Line::from(format!(" Total Tracks    : {}", total)),
-                Line::from(format!(" Selected        : {}", selected)),
+                Line::from(vec![
+                    ratatui::text::Span::styled(" Total Tracks    : ", Style::default().fg(Color::White)),
+                    ratatui::text::Span::styled(format!("{}", total), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(vec![
+                    ratatui::text::Span::styled(" Selected        : ", Style::default().fg(Color::White)),
+                    ratatui::text::Span::styled(format!("{}", selected), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                ]),
                 Line::from(""),
                 Line::from(" Controls:"),
-                Line::from(ratatui::text::Span::styled(" [↑/↓]  Navigate Tracks", Style::default().fg(Color::Cyan))),
-                Line::from(ratatui::text::Span::styled(" [Space] Toggle Selection", Style::default().fg(Color::Cyan))),
-                Line::from(ratatui::text::Span::styled(" [A]     Select/Deselect All", Style::default().fg(Color::Cyan))),
+                Line::from(vec![
+                    ratatui::text::Span::styled(" [↑/↓]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    ratatui::text::Span::styled("   Navigate Tracks", Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    ratatui::text::Span::styled(" [Space]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    ratatui::text::Span::styled(" Toggle Selection", Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    ratatui::text::Span::styled(" [A]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    ratatui::text::Span::styled("     Select/Deselect All", Style::default().fg(Color::White)),
+                ]),
                 Line::from(""),
-                Line::from(ratatui::text::Span::styled(" [D] or [Enter] Start Download", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
-                Line::from(ratatui::text::Span::styled(" [Esc]   Back to Link Input", Style::default().fg(Color::Yellow))),
+                Line::from(ratatui::text::Span::styled(" [D] or [Enter] Start Download", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))),
+                Line::from(ratatui::text::Span::styled(" [Esc]   Back to Link Input", Style::default().fg(Color::DarkGray))),
             ];
 
             let info_block = Paragraph::new(info_lines)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(" Info & Controls ")
-                        .border_style(Style::default().fg(Color::Yellow))
+                        .border_type(BorderType::Rounded)
+                        .title(" 󰲸  Info & Controls ")
+                        .title_style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
+                        .border_style(Style::default().fg(Color::Cyan))
                 );
             f.render_widget(info_block, chunks[1]);
         }
@@ -234,10 +259,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .map(|(idx, track)| {
                     let is_active = idx == app.current_playlist_track_index;
                     let (status_icon, style) = match &track.status {
-                        crate::PlaylistTrackStatus::Pending => ("⏳ ", Style::default().fg(Color::DarkGray)),
-                        crate::PlaylistTrackStatus::Processing => ("🔄 ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                        crate::PlaylistTrackStatus::Success(_) => ("✅ ", Style::default().fg(Color::Green)),
-                        crate::PlaylistTrackStatus::Failed(_) => ("❌ ", Style::default().fg(Color::Red)),
+                        crate::PlaylistTrackStatus::Pending => ("󱎫 ", Style::default().fg(Color::DarkGray)),
+                        crate::PlaylistTrackStatus::Processing => ("󰚔 ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                        crate::PlaylistTrackStatus::Success(_) => ("󰄴 ", Style::default().fg(Color::Green)),
+                        crate::PlaylistTrackStatus::Failed(_) => ("󰅙 ", Style::default().fg(Color::Red)),
                     };
                     
                     let mut line_style = style;
@@ -247,7 +272,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
                     ListItem::new(Line::from(vec![
                         ratatui::text::Span::styled(status_icon, style),
-                        ratatui::text::Span::styled(format!("{} - {}", track.artist, track.title), line_style),
+                        ratatui::text::Span::styled(format!(" {} - {}", track.artist, track.title), line_style),
                     ]))
                 })
                 .collect();
@@ -256,13 +281,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Cyan))
-                        .title(" Download Progress ")
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(Color::Magenta))
+                        .title(" 󰲸  Download Progress ")
+                        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
                 )
                 .highlight_style(
                     Style::default()
-                        .bg(Color::Blue)
-                        .fg(Color::White)
+                        .bg(Color::Magenta)
+                        .fg(Color::Black)
                         .add_modifier(Modifier::BOLD),
                 );
 
@@ -270,10 +297,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             f.render_stateful_widget(queue_block, chunks[0], &mut app.playlist_list_state);
 
             let queue_scrollbar = ratatui::widgets::Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
-                .begin_symbol(Some("▲"))
-                .end_symbol(Some("▼"))
-                .track_symbol(Some("│"))
-                .thumb_symbol("┃");
+                .begin_symbol(Some("󰄿"))
+                .end_symbol(Some("󰄼"))
+                .track_symbol(Some("┋"))
+                .thumb_symbol("█")
+                .track_style(Style::default().fg(Color::Magenta))
+                .thumb_style(Style::default().fg(Color::Magenta));
             let mut queue_scrollbar_state = ratatui::widgets::ScrollbarState::new(app.playlist_tracks.len())
                 .position(app.current_playlist_track_index);
             f.render_stateful_widget(
@@ -290,7 +319,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     } else if log.starts_with("[!]") {
                         Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
                     } else if log.starts_with("[>]") {
-                        Style::default().fg(Color::Cyan)
+                        Style::default().fg(Color::Magenta)
                     } else {
                         Style::default().fg(Color::White)
                     };
@@ -320,18 +349,22 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Yellow))
-                        .title(status_title),
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(Color::Cyan))
+                        .title(status_title)
+                        .title_style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
                 )
                 .scroll((app.log_scroll_y, 0))
                 .wrap(Wrap { trim: true });
             f.render_widget(logs_paragraph, chunks[1]);
 
             let logs_scrollbar = ratatui::widgets::Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
-                .begin_symbol(Some("▲"))
-                .end_symbol(Some("▼"))
-                .track_symbol(Some("│"))
-                .thumb_symbol("┃");
+                .begin_symbol(Some("󰄿"))
+                .end_symbol(Some("󰄼"))
+                .track_symbol(Some("┋"))
+                .thumb_symbol("█")
+                .track_style(Style::default().fg(Color::Cyan))
+                .thumb_style(Style::default().fg(Color::Cyan));
             let mut logs_scrollbar_state = ratatui::widgets::ScrollbarState::new(total_lines as usize)
                 .position(app.log_scroll_y as usize);
             f.render_stateful_widget(
@@ -350,20 +383,22 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .split(f.area());
 
             let search_title = if app.is_searching {
-                " Search YouTube (Searching...) "
+                " 🔍 Search YouTube (Searching...) "
             } else {
-                " Search YouTube (Press Enter) "
+                " 🔍 Search YouTube (Press Enter) "
             };
             
             let search_block = Paragraph::new(app.search_input.as_str()).block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .border_style(if app.is_searching {
                         Style::default().fg(Color::Yellow)
                     } else {
-                        Style::default()
+                        Style::default().fg(Color::Magenta)
                     })
-                    .title(search_title),
+                    .title(search_title)
+                    .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             );
             f.render_widget(search_block, chunks[0]);
 
@@ -388,15 +423,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                             .block(
                                 Block::default()
                                     .borders(Borders::ALL)
+                                    .border_type(BorderType::Rounded)
                                     .border_style(Style::default().fg(Color::Yellow))
-                                    .title(" Search Results "),
+                                    .title(" Search Results ")
+                                    .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
                             );
                         f.render_widget(loading_p, chunks[1]);
                     } else {
                         let items: Vec<ListItem> = app
                             .search_results
                             .iter()
-                            .map(|res| ListItem::new(Line::from(res.title.as_str())))
+                            .map(|res| ListItem::new(Line::from(format!(" 󰝚  {}", res.title))))
                             .collect();
 
                         let list_title = if app.search_results.is_empty() {
@@ -409,27 +446,31 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                             .block(
                                 Block::default()
                                     .borders(Borders::ALL)
+                                    .border_type(BorderType::Rounded)
                                     .border_style(if !app.search_results.is_empty() {
-                                        Style::default().fg(Color::Green)
+                                        Style::default().fg(Color::Magenta)
                                     } else {
-                                        Style::default()
+                                        Style::default().fg(Color::DarkGray)
                                     })
                                     .title(list_title)
+                                    .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
                             )
                             .highlight_style(
                                 Style::default()
-                                    .bg(Color::Blue)
-                                    .fg(Color::White)
+                                    .bg(Color::Magenta)
+                                    .fg(Color::Black)
                                     .add_modifier(Modifier::BOLD),
                             );
 
                         f.render_stateful_widget(list, chunks[1], &mut app.list_state);
 
                         let scrollbar = ratatui::widgets::Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
-                            .begin_symbol(Some("▲"))
-                            .end_symbol(Some("▼"))
-                            .track_symbol(Some("│"))
-                            .thumb_symbol("┃");
+                            .begin_symbol(Some("󰄿"))
+                            .end_symbol(Some("󰄼"))
+                            .track_symbol(Some("┋"))
+                            .thumb_symbol("█")
+                            .track_style(Style::default().fg(Color::Magenta))
+                            .thumb_style(Style::default().fg(Color::Magenta));
                         let mut scrollbar_state = ratatui::widgets::ScrollbarState::new(app.search_results.len())
                             .position(app.list_state.selected().unwrap_or(0));
                         f.render_stateful_widget(
@@ -453,11 +494,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                         .as_ref()
                         .map(|v| v.title.as_str())
                         .unwrap_or("Unknown Song");
-                    let summary_block = Paragraph::new(selected_title).block(
+                    let summary_block = Paragraph::new(format!(" 󰝚  {}", selected_title)).block(
                         Block::default()
                             .borders(Borders::ALL)
+                            .border_type(BorderType::Rounded)
                             .border_style(Style::default().fg(Color::Cyan))
-                            .title(" Selected Video "),
+                            .title(" Selected Video ")
+                            .title_style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
                     );
                     f.render_widget(summary_block, sub_chunks[0]);
 
@@ -470,7 +513,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                             } else if log.starts_with("[!]") {
                                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
                             } else if log.starts_with("[>]") {
-                                Style::default().fg(Color::Cyan)
+                                Style::default().fg(Color::Magenta)
                             } else {
                                 Style::default().fg(Color::White)
                             };
@@ -502,18 +545,22 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                         .block(
                             Block::default()
                                 .borders(Borders::ALL)
-                                .border_style(Style::default().fg(Color::Yellow))
-                                .title(status_title),
+                                .border_type(BorderType::Rounded)
+                                .border_style(Style::default().fg(Color::Magenta))
+                                .title(status_title)
+                                .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
                         )
                         .scroll((app.log_scroll_y, 0))
                         .wrap(Wrap { trim: true });
                     f.render_widget(logs_paragraph, sub_chunks[1]);
 
                     let logs_scrollbar = ratatui::widgets::Scrollbar::new(ratatui::widgets::ScrollbarOrientation::VerticalRight)
-                        .begin_symbol(Some("▲"))
-                        .end_symbol(Some("▼"))
-                        .track_symbol(Some("│"))
-                        .thumb_symbol("┃");
+                        .begin_symbol(Some("󰄿"))
+                        .end_symbol(Some("󰄼"))
+                        .track_symbol(Some("┋"))
+                        .thumb_symbol("█")
+                        .track_style(Style::default().fg(Color::Magenta))
+                        .thumb_style(Style::default().fg(Color::Magenta));
                     let mut logs_scrollbar_state = ratatui::widgets::ScrollbarState::new(total_lines as usize)
                         .position(app.log_scroll_y as usize);
                     f.render_stateful_widget(
@@ -527,4 +574,3 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     }
 }
-
