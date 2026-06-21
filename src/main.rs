@@ -106,6 +106,8 @@ struct App {
     playlist_error: Option<String>,
     log_scroll_y: u16,
     log_manual_scroll: bool,
+    playlist_area: Rect,
+    menu_area: Rect,
 }
 
 impl App {
@@ -130,6 +132,8 @@ impl App {
             playlist_error: None,
             log_scroll_y: 0,
             log_manual_scroll: false,
+            playlist_area: Rect::default(),
+            menu_area: Rect::default(),
         }
     }
 
@@ -213,7 +217,7 @@ impl App {
 
     fn on_click(&mut self, row: u16) -> Option<SearchResult> {
         if row > self.results_area.y && row < self.results_area.y + self.results_area.height - 1 {
-            let index = (row - self.results_area.y - 1) as usize;
+            let index = self.list_state.offset() + (row - self.results_area.y - 1) as usize;
             if index < self.search_results.len() {
                 self.list_state.select(Some(index));
                 return Some(self.search_results[index].clone());
@@ -378,6 +382,13 @@ fn load_config() {
                     if let Some(emb_lyr) = music.get("embed_lyrics").and_then(|v| v.as_bool()) {
                         unsafe { env::set_var("YOUTIDY_EMBED_LYRICS", emb_lyr.to_string()); }
                     }
+                    if let Some(mpc) = music.get("mpc_add").and_then(|v| v.as_bool()) {
+                        unsafe { env::set_var("YOUTIDY_MPC_ADD", mpc.to_string()); }
+                    }
+                    if let Some(mpd_h) = music.get("mpd_host").and_then(|v| v.as_str()) {
+                        let expanded = expand_tilde(mpd_h);
+                        unsafe { env::set_var("MPD_HOST", expanded); }
+                    }
                 }
                 if let Some(api) = config.get("api").and_then(|v| v.as_table()) {
                     if let Some(id) = api.get("acoustid_client_id").and_then(|v| v.as_str()) {
@@ -387,14 +398,22 @@ fn load_config() {
                         unsafe { env::set_var("GENIUS_ACCESS_TOKEN", tok); }
                     }
                 }
-                if let Some(tui) = config.get("tui").and_then(|v| v.as_table())
-                    && let Some(limit) = tui.get("search_limit") {
+                if let Some(tui) = config.get("tui").and_then(|v| v.as_table()) {
+                    if let Some(limit) = tui.get("search_limit") {
                         if let Some(l_int) = limit.as_integer() {
                             unsafe { env::set_var("YOUTIDY_SEARCH_LIMIT", l_int.to_string()); }
                         } else if let Some(l_str) = limit.as_str() {
                             unsafe { env::set_var("YOUTIDY_SEARCH_LIMIT", l_str); }
                         }
                     }
+                    if let Some(p_limit) = tui.get("playlist_limit") {
+                        if let Some(pl_int) = p_limit.as_integer() {
+                            unsafe { env::set_var("YOUTIDY_PLAYLIST_LIMIT", pl_int.to_string()); }
+                        } else if let Some(pl_str) = p_limit.as_str() {
+                            unsafe { env::set_var("YOUTIDY_PLAYLIST_LIMIT", pl_str); }
+                        }
+                    }
+                }
                 if let Some(network) = config.get("network").and_then(|v| v.as_table()) {
                     if let Some(ua) = network.get("user_agent").and_then(|v| v.as_str()) {
                         unsafe { env::set_var("YOUTIDY_USER_AGENT", ua); }
@@ -729,28 +748,101 @@ where
                         }
                     }
                     Event::Mouse(mouse) => {
-                        if mouse.kind == MouseEventKind::Down(event::MouseButton::Left)
-                            && app.state == AppState::Selecting && !app.is_searching
-                                && let Some(selected) = app.on_click(mouse.row) {
-                                    app.selected_video = Some(selected.clone());
-                                    app.state = AppState::Processing;
-                                    app.logs.clear();
-                                    app.logs.push(format!("[>] Initialized pipeline for: {}", selected.title));
- 
-                                    let tx = event_tx.clone();
-                                    tokio::spawn(async move {
-                                        let start_time = std::time::Instant::now();
-                                        match run_pipeline(selected, tx.clone(), None).await {
-                                            Ok(dest_path) => {
-                                                let elapsed = start_time.elapsed();
-                                                let _ = tx.send(AppEvent::ProcessingFinished(Ok((dest_path, elapsed)))).await;
-                                            }
-                                            Err(e) => {
-                                                let _ = tx.send(AppEvent::ProcessingFinished(Err(e.to_string()))).await;
+                        match mouse.kind {
+                            MouseEventKind::Down(event::MouseButton::Left) => {
+                                match app.state {
+                                    AppState::MainMenu => {
+                                        if mouse.row > app.menu_area.y && mouse.row < app.menu_area.y + app.menu_area.height - 1 {
+                                            let rel_row = mouse.row - app.menu_area.y;
+                                            if rel_row == 1 || rel_row == 2 {
+                                                app.menu_index = 0;
+                                                app.state = AppState::Searching;
+                                            } else if rel_row == 3 || rel_row == 4 {
+                                                app.menu_index = 1;
+                                                app.state = AppState::PlaylistInput;
                                             }
                                         }
-                                    });
+                                    }
+                                    AppState::Selecting if !app.is_searching => {
+                                        if let Some(selected) = app.on_click(mouse.row) {
+                                            app.selected_video = Some(selected.clone());
+                                            app.state = AppState::Processing;
+                                            app.logs.clear();
+                                            app.logs.push(format!("[>] Initialized pipeline for: {}", selected.title));
+
+                                            let tx = event_tx.clone();
+                                            tokio::spawn(async move {
+                                                let start_time = std::time::Instant::now();
+                                                match run_pipeline(selected, tx.clone(), None).await {
+                                                    Ok(dest_path) => {
+                                                        let elapsed = start_time.elapsed();
+                                                        let _ = tx.send(AppEvent::ProcessingFinished(Ok((dest_path, elapsed)))).await;
+                                                    }
+                                                    Err(e) => {
+                                                        let _ = tx.send(AppEvent::ProcessingFinished(Err(e.to_string()))).await;
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                    AppState::PlaylistConfirm => {
+                                        if mouse.row > app.playlist_area.y && mouse.row < app.playlist_area.y + app.playlist_area.height - 1 {
+                                            let clicked_idx = app.playlist_list_state.offset() + (mouse.row - app.playlist_area.y - 1) as usize;
+                                            if clicked_idx < app.playlist_tracks.len() {
+                                                app.playlist_list_state.select(Some(clicked_idx));
+                                                app.toggle_track_selection();
+                                            }
+                                        }
+                                    }
+                                    _ => {}
                                 }
+                            }
+                            MouseEventKind::ScrollUp => {
+                                match app.state {
+                                    AppState::MainMenu => {
+                                        if app.menu_index > 0 {
+                                            app.menu_index -= 1;
+                                        } else {
+                                            app.menu_index = 1;
+                                        }
+                                    }
+                                    AppState::Selecting if !app.is_searching => {
+                                        app.previous();
+                                    }
+                                    AppState::PlaylistConfirm => {
+                                        app.playlist_previous();
+                                    }
+                                    AppState::Processing | AppState::PlaylistProcessing => {
+                                        app.log_scroll_y = app.log_scroll_y.saturating_sub(1);
+                                        app.log_manual_scroll = true;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            MouseEventKind::ScrollDown => {
+                                match app.state {
+                                    AppState::MainMenu => {
+                                        if app.menu_index < 1 {
+                                            app.menu_index += 1;
+                                        } else {
+                                            app.menu_index = 0;
+                                        }
+                                    }
+                                    AppState::Selecting if !app.is_searching => {
+                                        app.next();
+                                    }
+                                    AppState::PlaylistConfirm => {
+                                        app.playlist_next();
+                                    }
+                                    AppState::Processing | AppState::PlaylistProcessing => {
+                                        app.log_scroll_y = app.log_scroll_y.saturating_add(1);
+                                        app.log_manual_scroll = true;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                     _ => {}
                 }
@@ -965,6 +1057,15 @@ async fn get_youtube_playlist_tracks(url: &str) -> Result<Vec<PlaylistTrack>, Bo
     let mut cmd = tokio::process::Command::new("yt-dlp");
     cmd.arg("--flat-playlist")
        .arg("-J");
+       
+    // Only apply limit for auto-generated mix/radio playlists (contain list=RD, list=UL or start_radio=)
+    let is_mix = url.contains("list=RD") || url.contains("list=UL") || url.contains("start_radio=");
+    if is_mix {
+        let limit = env::var("YOUTIDY_PLAYLIST_LIMIT").unwrap_or_else(|_| "50".to_string());
+        if !limit.trim().is_empty() && limit != "0" {
+            cmd.arg("--playlist-end").arg(&limit);
+        }
+    }
        
     // Apply proxy/ua if set in env
     if let Ok(proxy) = env::var("YOUTIDY_PROXY")
@@ -1417,6 +1518,7 @@ async fn run_pipeline(
         duration,
         &dest_dir,
         &filename,
+        &video.title,
         tx.clone(),
     ).await {
         let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Lyrics lookup skipped/failed: {}", e))).await;
@@ -1477,6 +1579,56 @@ async fn run_pipeline(
     std::fs::remove_file(&temp_filename)?;
     
     let _ = tx.send(AppEvent::ProcessingLog(format!("[>] File saved to destination: {}", dest_file))).await;
+
+    // Auto add to mpc queue if enabled
+    if env::var("YOUTIDY_MPC_ADD").map(|v| v.parse::<bool>().unwrap_or(false)).unwrap_or(false) {
+        let relative_path = if folder_relative.trim().is_empty() {
+            format!("{}.{}", filename, format)
+        } else {
+            format!("{}/{}.{}", folder_relative.trim_matches('/'), filename, format)
+        };
+        let _ = tx.send(AppEvent::ProcessingLog(format!("[>] Adding to mpc queue: {}", relative_path))).await;
+        
+        let update_status = tokio::process::Command::new("mpc")
+            .arg("update")
+            .arg("--wait")
+            .arg(&relative_path)
+            .status()
+            .await;
+            
+        match update_status {
+            Ok(status) if status.success() => {
+                let add_status = tokio::process::Command::new("mpc")
+                    .arg("add")
+                    .arg(&relative_path)
+                    .status()
+                    .await;
+                    
+                match add_status {
+                    Ok(status) if status.success() => {
+                        let _ = tx.send(AppEvent::ProcessingLog("[>] Successfully added to mpc queue.".to_string())).await;
+                    }
+                    Ok(status) => {
+                        let _ = tx.send(AppEvent::ProcessingLog(format!("[!] mpc add failed with exit code: {:?}", status.code()))).await;
+                    }
+                    Err(e) => {
+                        let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Failed to run mpc add: {}", e))).await;
+                    }
+                }
+            }
+            Ok(status) => {
+                let _ = tx.send(AppEvent::ProcessingLog(format!("[!] mpc update --wait failed, trying direct add: {:?}", status.code()))).await;
+                let _ = tokio::process::Command::new("mpc")
+                    .arg("add")
+                    .arg(&relative_path)
+                    .status()
+                    .await;
+            }
+            Err(e) => {
+                let _ = tx.send(AppEvent::ProcessingLog(format!("[!] Failed to run mpc update: {}", e))).await;
+            }
+        }
+    }
 
     // Save cache record
     let record = CacheRecord {

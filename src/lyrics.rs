@@ -569,6 +569,13 @@ fn clean_query_name(name: &str) -> String {
     cleaned.trim().to_string()
 }
 
+#[derive(serde::Deserialize)]
+struct SpotifyMetadata {
+    artist: String,
+    title: String,
+    album: String,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn fetch_and_save_lyrics(
     client: &reqwest::Client,
@@ -578,6 +585,7 @@ pub async fn fetch_and_save_lyrics(
     duration: f64,
     dest_dir: &str,
     clean_title: &str,
+    youtube_title: &str,
     tx: tokio::sync::mpsc::Sender<AppEvent>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _ = tx.send(AppEvent::ProcessingLog("[>] Starting lyrics search...".to_string())).await;
@@ -585,7 +593,7 @@ pub async fn fetch_and_save_lyrics(
     let clean_artist = clean_query_name(artist);
     let clean_track = clean_query_name(title);
     
-    let synced_lyrics = match get_lrclib_synced_lyrics(client, &clean_artist, &clean_track, album, duration, tx.clone()).await {
+    let mut synced_lyrics = match get_lrclib_synced_lyrics(client, &clean_artist, &clean_track, album, duration, tx.clone()).await {
         Ok(Some(lrc)) => Some(lrc),
         _ => {
             let _ = tx.send(AppEvent::ProcessingLog("[>] Swapping artist and title search...".to_string())).await;
@@ -595,6 +603,46 @@ pub async fn fetch_and_save_lyrics(
             }
         }
     };
+
+    // If lyrics not found on LRCLIB using current metadata, try Spotify fallback metadata
+    if synced_lyrics.is_none() {
+        let _ = tx.send(AppEvent::ProcessingLog("[!] Synced lyrics not found on LRCLIB with current metadata. Trying Spotify fallback...".to_string())).await;
+        
+        let output = tokio::process::Command::new(".venv/bin/python3")
+            .arg("src/spotify_fallback.py")
+            .arg(youtube_title)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .await;
+            
+        if let Ok(out) = output {
+            if out.status.success() {
+                if let Ok(spotify_meta) = serde_json::from_slice::<SpotifyMetadata>(&out.stdout) {
+                    let spot_artist = clean_query_name(&spotify_meta.artist);
+                    let spot_track = clean_query_name(&spotify_meta.title);
+                    
+                    // Only search again if the metadata is actually different
+                    if spot_artist.to_lowercase() != clean_artist.to_lowercase() || spot_track.to_lowercase() != clean_track.to_lowercase() {
+                        let _ = tx.send(AppEvent::ProcessingLog(format!(
+                            "[>] Trying LRCLIB with Spotify fallback metadata: \"{}\" - \"{}\"...",
+                            spotify_meta.artist, spotify_meta.title
+                        ))).await;
+                        
+                        synced_lyrics = match get_lrclib_synced_lyrics(client, &spot_artist, &spot_track, &spotify_meta.album, duration, tx.clone()).await {
+                            Ok(Some(lrc)) => Some(lrc),
+                            _ => {
+                                match get_lrclib_synced_lyrics(client, &spot_track, &spot_artist, &spotify_meta.album, duration, tx.clone()).await {
+                                    Ok(Some(lrc)) => Some(lrc),
+                                    _ => None,
+                                }
+                            }
+                        };
+                    }
+                }
+            }
+        }
+    }
     
     let lrc_content = if let Some((synced, lrc_duration)) = synced_lyrics {
         let _ = tx.send(AppEvent::ProcessingLog("[+] Synced lyrics found on LRCLIB.".to_string())).await;

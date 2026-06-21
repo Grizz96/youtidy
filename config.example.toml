@@ -30,6 +30,12 @@ save_cover_file = true
 # Whether to embed lyrics directly into the audio file tags (ID3v2)
 embed_lyrics = false
 
+# Whether to automatically run `mpc update <file>` and `mpc add <file>` upon successful download
+mpc_add = false
+
+# Optional: Unix socket path or host IP for MPD (useful if you use a socket instead of port 6600)
+# mpd_host = "~/.local/share/mpd/socket"
+
 [api]
 # AcoustID Client ID for audio fingerprinting
 acoustid_client_id = "your_acoustid_client_id_here"
@@ -40,6 +46,10 @@ genius_access_token = "your_genius_access_token_here"
 [tui]
 # Limit for YouTube search results (default: 10)
 search_limit = 10
+
+# Limit for YouTube auto-generated mix/radio playlists to load (default: 50)
+# Real playlists (e.g. list=PL...) will not be affected by this limit.
+playlist_limit = 50
 
 [network]
 # Custom User-Agent header for HTTP requests and yt-dlp

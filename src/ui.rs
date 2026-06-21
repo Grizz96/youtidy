@@ -24,6 +24,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .alignment(Alignment::Center)
                 .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
             f.render_widget(title_p, layout[1]);
+            app.menu_area = layout[2];
 
             let item_search = if app.menu_index == 0 {
                 " > 🔍 Search & Download Single Song < "
@@ -139,6 +140,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     Constraint::Percentage(40), // Right: Info/actions
                 ])
                 .split(f.area());
+            app.playlist_area = chunks[0];
 
             let items: Vec<ListItem> = app.playlist_tracks
                 .iter()
