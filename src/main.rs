@@ -1926,3 +1926,88 @@ fn get_default_cache_dir() -> String {
     "cache".to_string()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_mix_playlist() {
+        load_config();
+        
+        let url = "https://www.youtube.com/watch?v=uWPbjtsQjGc&list=RDuWPbjtsQjGc&start_radio=1";
+        println!("Fetching playlist tracks...");
+        let tracks = get_youtube_playlist_tracks(url).await.unwrap();
+        println!("Total tracks fetched: {}", tracks.len());
+        
+        // Test first 5 tracks to verify success/error count and reasons
+        let test_count = 5;
+        let mut successes = 0;
+        let mut failures = 0;
+        let mut fail_reasons = Vec::new();
+        
+        for (i, track) in tracks.iter().take(test_count).enumerate() {
+            println!("\n----------------------------------------");
+            println!("Testing Track {}/{}: {} - {}", i + 1, test_count, track.artist, track.title);
+            println!("----------------------------------------");
+            
+            let search_res = SearchResult {
+                title: track.title.clone(),
+                url: track.url.clone().unwrap(),
+                id: track.id.clone(),
+            };
+            
+            let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+            
+            let handle = tokio::spawn(async move {
+                run_pipeline(search_res, tx, None).await
+            });
+            
+            // Collect logs while downloading
+            while let Some(event) = rx.recv().await {
+                match event {
+                    AppEvent::ProcessingLog(log) => {
+                        println!("  [LOG] {}", log);
+                    }
+                    AppEvent::ProcessingFinished(res) => {
+                        match res {
+                            Ok((path, duration)) => {
+                                println!("  [FINISHED] Success! Saved to {}, took {:?}", path, duration);
+                            }
+                            Err(e) => {
+                                println!("  [FINISHED] Failed: {}", e);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            
+            match handle.await.unwrap() {
+                Ok(path) => {
+                    println!("Track {} download Succeeded: {}", i + 1, path);
+                    successes += 1;
+                }
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    println!("Track {} download Failed: {}", i + 1, err_msg);
+                    failures += 1;
+                    fail_reasons.push(format!("\"{}\" - \"{}\": {}", track.artist, track.title, err_msg));
+                }
+            }
+        }
+        
+        println!("\n=== TEST SUMMARY ===");
+        println!("Tested: {}", test_count);
+        println!("Successes: {}", successes);
+        println!("Failures: {}", failures);
+        if !fail_reasons.is_empty() {
+            println!("Failure Details:");
+            for (idx, reason) in fail_reasons.iter().enumerate() {
+                println!("  {}. {}", idx + 1, reason);
+            }
+        }
+        
+        assert!(successes + failures > 0);
+    }
+}
+

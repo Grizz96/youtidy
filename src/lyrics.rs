@@ -644,41 +644,29 @@ pub async fn fetch_and_save_lyrics(
         }
     }
     
-    let lrc_content = if let Some((synced, lrc_duration)) = synced_lyrics {
-        let _ = tx.send(AppEvent::ProcessingLog("[+] Synced lyrics found on LRCLIB.".to_string())).await;
-        let offset = duration - lrc_duration;
-        
-        if contains_japanese(&synced) {
-            let _ = tx.send(AppEvent::ProcessingLog("[>] Japanese lyrics detected. Romanizing...".to_string())).await;
-            if let Some(res) = run_python_lyrics_worker("process", offset, &clean_artist, &clean_track, Some(&synced)).await {
-                let _ = tx.send(AppEvent::ProcessingLog("[+] Processed lyrics using Python lyrics worker.".to_string())).await;
-                res
-            } else {
-                let _ = tx.send(AppEvent::ProcessingLog("[!] Python worker not available or failed. Using Rust fallback...".to_string())).await;
-                romanize_lrc(&synced, &clean_artist, &clean_track, offset, client, tx.clone()).await
-            }
+    let (synced, lrc_duration) = match synced_lyrics {
+        Some(val) => val,
+        None => {
+            let _ = tx.send(AppEvent::ProcessingLog("[!] Synced lyrics not found on LRCLIB (even with Spotify fallback). Skipping lyrics save.".to_string())).await;
+            return Ok(());
+        }
+    };
+    
+    let _ = tx.send(AppEvent::ProcessingLog("[+] Synced lyrics found on LRCLIB.".to_string())).await;
+    let offset = duration - lrc_duration;
+    
+    let lrc_content = if contains_japanese(&synced) {
+        let _ = tx.send(AppEvent::ProcessingLog("[>] Japanese lyrics detected. Romanizing...".to_string())).await;
+        if let Some(res) = run_python_lyrics_worker("process", offset, &clean_artist, &clean_track, Some(&synced)).await {
+            let _ = tx.send(AppEvent::ProcessingLog("[+] Processed lyrics using Python lyrics worker.".to_string())).await;
+            res
         } else {
-            let _ = tx.send(AppEvent::ProcessingLog("[>] Shifting timestamps to match audio...".to_string())).await;
-            shift_lrc_timestamps(&synced, offset)
+            let _ = tx.send(AppEvent::ProcessingLog("[!] Python worker not available or failed. Using Rust fallback...".to_string())).await;
+            romanize_lrc(&synced, &clean_artist, &clean_track, offset, client, tx.clone()).await
         }
     } else {
-        let _ = tx.send(AppEvent::ProcessingLog("[!] Synced lyrics not found on LRCLIB. Trying Genius fallback...".to_string())).await;
-        if let Some(res) = run_python_lyrics_worker("fetch", 0.0, &clean_artist, &clean_track, None).await {
-            let _ = tx.send(AppEvent::ProcessingLog("[+] Found lyrics on Genius via Python worker.".to_string())).await;
-            format!("[ar:{}]\n[al:{}]\n[ti:{}]\n{}", artist, album, title, res)
-        } else {
-            let _ = tx.send(AppEvent::ProcessingLog("[!] Python worker fallback failed or not found. Trying Rust Genius search...".to_string())).await;
-            match fetch_genius_lyrics(client, &clean_artist, &clean_track, tx.clone()).await {
-                Ok(Some(genius_lyrics)) => {
-                    let _ = tx.send(AppEvent::ProcessingLog("[+] Plain lyrics found on Genius.".to_string())).await;
-                    format!("[ar:{}]\n[al:{}]\n[ti:{}]\n{}", artist, album, title, genius_lyrics)
-                }
-                _ => {
-                    let _ = tx.send(AppEvent::ProcessingLog("[!] No lyrics found on Genius. Skipping.".to_string())).await;
-                    return Ok(());
-                }
-            }
-        }
+        let _ = tx.send(AppEvent::ProcessingLog("[>] Shifting timestamps to match audio...".to_string())).await;
+        shift_lrc_timestamps(&synced, offset)
     };
     
     let lrc_path = format!("{}/{}.lrc", dest_dir, clean_title);
