@@ -1593,6 +1593,8 @@ async fn run_pipeline(
             .arg("update")
             .arg("--wait")
             .arg(&relative_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .await;
             
@@ -1601,6 +1603,8 @@ async fn run_pipeline(
                 let add_status = tokio::process::Command::new("mpc")
                     .arg("add")
                     .arg(&relative_path)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
                     .status()
                     .await;
                     
@@ -1621,6 +1625,8 @@ async fn run_pipeline(
                 let _ = tokio::process::Command::new("mpc")
                     .arg("add")
                     .arg(&relative_path)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
                     .status()
                     .await;
             }
